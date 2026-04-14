@@ -11,7 +11,6 @@
     body { font-family: 'DM Sans', sans-serif; }
     h1, h2, .font-syne { font-family: 'Syne', sans-serif; }
 
-    /* Custom Background Effects */
     .bg-grid {
       background-image:
         linear-gradient(rgba(124,111,255,0.04) 1px, transparent 1px),
@@ -38,12 +37,12 @@
         <div class="w-8.5 h-8.5 rounded-lg bg-gradient-to-br from-[#7c6fff] to-[#a78bfa] flex items-center justify-center">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
         </div>
-        <span class="font-syne text-[17px] font-extrabold tracking-tight">CD<span class="text-[#a78bfa]">KFM</span></span>
+        <span class="font-syne text-[17px] font-extrabold tracking-tight">Doc<span class="text-[#a78bfa]">Nexus</span></span>
       </div>
       <span class="text-[11px] px-3 py-1 rounded-full bg-[#7c6fff]/10 text-[#a78bfa] border border-[#7c6fff]/20 font-medium">Knowledge Fusion System</span>
     </nav>
 
-    <div class="animate-fade-up pt-14 px-6 pb-10 text-center">
+     <div class="animate-fade-up pt-14 px-6 pb-10 text-center">
       <h1 class="text-3xl md:text-4xl font-extrabold tracking-tighter leading-tight mb-4">
         Turn scattered docs into<br>
         <span class="bg-gradient-to-r from-[#a78bfa] via-[#60a5fa] to-[#34d399] bg-clip-text text-transparent">one perfect knowledge base</span>
@@ -76,15 +75,14 @@
         <div class="flex-1 h-px bg-white/5"></div>
       </div>
 
- <div id="fileList" class="flex flex-col gap-3 mt-8">
-
-        <button onclick="document.getElementById('fileInput').click()" class="flex items-center gap-3 p-4 w-full border border-dashed border-white/10 rounded-2xl cursor-pointer text-zinc-500 text-sm hover:border-[#7c6fff]/40 hover:text-[#a78bfa] hover:bg-[#7c6fff]/5 transition-all">
-          <div class="w-6 h-6 rounded-full border border-current flex items-center justify-center">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          </div>
-          Add more documents
-        </button>
-      </div>
+      <div id="fileList" class="flex flex-col gap-3 mt-8">
+  <button id="addMoreBtn" onclick="document.getElementById('fileInput').click()" class="flex items-center gap-3 p-4 w-full border border-dashed border-white/10 rounded-2xl cursor-pointer text-zinc-500 text-sm hover:border-[#7c6fff]/40 transition-all">
+    <div class="w-6 h-6 rounded-full border border-current flex items-center justify-center">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </div>
+    Add more documents
+  </button>
+</div>
 
       <div class="mt-10 mb-2">
         <label class="font-syne text-[11px] font-bold text-zinc-800 uppercase tracking-widest">Topic Label <span class="lowercase font-normal opacity-50">(optional)</span></label>
@@ -92,112 +90,31 @@
       <input id="topicInput" type="text" placeholder="e.g. Machine Learning, Neural Networks..." 
              class="w-full p-4 rounded-xl border border-white/5 bg-white/5 text-zinc-200 placeholder:text-zinc-800 outline-none focus:border-[#7c6fff]/40 focus:bg-[#7c6fff]/5 transition-all">
 
-      <div class="flex flex-wrap items-center justify-between mt-10 gap-6 border-t border-white/5 pt-8">
-        <div class="flex gap-8">
-          <div>
-            <div id="fileCount" class="font-syne text-2xl font-bold text-zinc-200">0</div>
-            <div class="text-[11px] text-zinc-800 font-bold uppercase tracking-wider">Documents</div>
-          </div>
-          <div>
-            <div id="totalSize" class="font-syne text-2xl font-bold text-zinc-200">0.0 MB</div>
-            <div class="text-[11px] text-zinc-800 font-bold uppercase tracking-wider">Total Size</div>
-          </div>
-        </div>
-
-        <div class="flex flex-col items-end gap-3">
-          <div id="warnMsg" class="hidden text-[11px] font-medium text-amber-500 bg-amber-500/10 px-3 py-1.5 rounded-lg border border-amber-500/20">
-            Add at least 2 documents to fuse
-          </div>
-          <button id="startBtn" class="flex items-center gap-2 px-8 py-3.5 rounded-xl bg-gradient-to-r from-[#7c6fff] to-[#a78bfa] text-white font-bold text-sm shadow-xl shadow-[#7c6fff]/20 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-20 disabled:scale-100 disabled:shadow-none transition-all">
-            Start Fusion
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
-          </button>
-        </div>
-      </div>
+      <div class="flex flex-wrap items-end justify-between mt-10 gap-6 border-t border-white/5 pt-8">
+  <div class="flex gap-8 pb-1">
+    <div>
+      <div id="fileCount" class="font-syne text-2xl font-bold text-zinc-200 leading-tight">0</div>
+      <div class="text-[11px] text-zinc-800 font-bold uppercase tracking-wider">Documents</div>
+    </div>
+    <div>
+      <div id="totalSize" class="font-syne text-2xl font-bold text-zinc-200 leading-tight">0.0 MB</div>
+      <div class="text-[11px] text-zinc-800 font-bold uppercase tracking-wider">Total Size</div>
     </div>
   </div>
 
-  <script>
-    function getFileNames() {
-      return Array.from(document.querySelectorAll('#fileList .file-card')).map(c => c.dataset.name);
-    }
+  <div class="flex flex-col items-end min-h-[80px] justify-end gap-3">
+    <div id="warnMsg" class="hidden text-[11px] font-medium text-amber-500 bg-amber-500/10 px-3 py-1.5 rounded-lg border border-amber-500/20 whitespace-nowrap">
+      Add at least 2 documents to fuse
+    </div>
+    <button id="startBtn" class="flex items-center gap-2 px-8 py-3.5 rounded-xl bg-gradient-to-r from-[#7c6fff] to-[#a78bfa] text-white font-bold text-sm shadow-xl shadow-[#7c6fff]/20 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-20 disabled:scale-100 disabled:shadow-none transition-all">
+      Start Fusion
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+      </svg>
+    </button>
+  </div>
+</div>
 
-    function getTotalSize() {
-      return Array.from(document.querySelectorAll('#fileList .file-card'))
-        .reduce((sum, c) => sum + parseFloat(c.dataset.size || 0), 0);
-    }
-
-    function updateStats() {
-      const count = document.querySelectorAll('#fileList .file-card').length;
-      const heading = document.getElementById('uploadHeading');
-      
-      if (heading) {
-        heading.classList.toggle('hidden', count === 0);
-        heading.classList.toggle('flex', count > 0);
-      }
-
-      document.getElementById('fileCount').textContent = count;
-      document.getElementById('totalSize').textContent = getTotalSize().toFixed(1) + ' MB';
-      
-      const btn = document.getElementById('startBtn');
-      const warn = document.getElementById('warnMsg');
-      
-      if (count < 2) {
-        btn.disabled = true;
-        warn.classList.remove('hidden');
-      } else {
-        btn.disabled = false;
-        warn.classList.add('hidden');
-      }
-    }
-
-    function removeFile(btn) {
-      const card = btn.closest('.file-card');
-      card.remove();
-      updateStats();
-    }
-
-    function createFileCard(name, sizeMB) {
-      const card = document.createElement('div');
-      card.className = 'file-card group flex items-center gap-4 p-4 bg-white/[0.03] border border-white/[0.06] rounded-2xl transition-all hover:border-[#7c6fff]/30 hover:bg-[#7c6fff]/5';
-      card.dataset.name = name;
-      card.dataset.size = sizeMB;
-      card.innerHTML = `
-        <div class="w-10 h-10 rounded-xl bg-[#7c6fff]/15 border border-[#7c6fff]/20 flex items-center justify-center shrink-0">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-        </div>
-        <div class="flex-1 min-w-0">
-          <div class="text-[13px] font-medium text-zinc-200 truncate">${name}</div>
-          <div class="text-[11px] text-zinc-600">${parseFloat(sizeMB).toFixed(1)} MB • PDF</div>
-        </div>
-        <span class="bg-[#34d399]/10 text-[#34d399] border border-[#34d399]/20 text-[10px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider">Ready</span>
-        <button class="w-8 h-8 rounded-lg border border-white/5 text-zinc-600 hover:text-red-400 hover:bg-red-400/10 hover:border-red-400/20 flex items-center justify-center transition-all" onclick="removeFile(this)">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>`;
-      return card;
-    }
-
-    function handleFiles(fileList) {
-      const list = document.getElementById('fileList');
-      const addBtn = list.querySelector('button');
-      const existingNames = getFileNames();
-
-      Array.from(fileList).forEach(file => {
-        if (!file.name.toLowerCase().endsWith('.pdf') || existingNames.includes(file.name)) return;
-        const sizeMB = (file.size / 1048576).toFixed(2);
-        list.insertBefore(createFileCard(file.name, sizeMB), addBtn);
-      });
-      updateStats();
-      document.getElementById('fileInput').value = '';
-    }
-
-    function handleDrop(e) {
-      e.preventDefault();
-      this.classList.remove('bg-[#7c6fff]/10');
-      handleFiles(e.dataTransfer.files);
-    }
-
-    updateStats();
-  </script>
+  <script src="app.js"></script>
 </body>
 </html>
