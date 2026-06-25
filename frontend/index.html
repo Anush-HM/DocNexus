@@ -3,27 +3,39 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>CDKFM — Upload Documents</title>
+  <title>DocNexus — Upload Documents</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500&display=swap');
-
     body { font-family: 'DM Sans', sans-serif; }
     h1, h2, .font-syne { font-family: 'Syne', sans-serif; }
-
     .bg-grid {
       background-image:
         linear-gradient(rgba(124,111,255,0.04) 1px, transparent 1px),
         linear-gradient(90deg, rgba(124,111,255,0.04) 1px, transparent 1px);
       background-size: 48px 48px;
     }
-
     @keyframes fadeUp {
       from { opacity: 0; transform: translateY(16px); }
       to   { opacity: 1; transform: translateY(0); }
     }
+    @keyframes float {
+      0%, 100% { transform: translateY(0px); }
+      50%       { transform: translateY(-6px); }
+    }
+    @keyframes spin-slow { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    @keyframes pulse-ring { 0%,100% { transform:scale(0.85); opacity:0.5; } 50% { transform:scale(1.15); opacity:0.15; } }
     .animate-fade-up { animation: fadeUp 0.5s ease both; }
     .animate-fade-up-delayed { animation: fadeUp 0.5s 0.1s ease both; }
+    .animate-float { animation: float 3s ease-in-out infinite; }
+    .spin-slow { animation: spin-slow 1.8s linear infinite; }
+    .pulse-ring { animation: pulse-ring 2s ease-in-out infinite; }
+    #uploadScreen { transition: opacity 0.35s ease, transform 0.35s ease; }
+    #processingScreen { transition: opacity 0.35s ease, transform 0.35s ease; }
+    .screen-hidden { opacity:0; pointer-events:none; position:absolute; inset:0; transform:translateY(18px); }
+    .screen-shown  { opacity:1; pointer-events:all; position:relative; transform:translateY(0); }
+    ::-webkit-scrollbar { width:4px; }
+    ::-webkit-scrollbar-thumb { background:rgba(124,111,255,0.3); border-radius:2px; }
   </style>
 </head>
 <body class="bg-[#0a0a0f] text-white min-h-screen relative overflow-x-hidden">
@@ -34,7 +46,7 @@
   <div class="relative z-10">
     <nav class="flex items-center justify-between px-6 md:px-10 py-4 border-b border-white/5 sticky top-0 bg-[#0a0a0f]/80 backdrop-blur-xl z-[100]">
       <div class="flex items-center gap-2.5">
-        <div class="w-8.5 h-8.5 rounded-lg bg-gradient-to-br from-[#7c6fff] to-[#a78bfa] flex items-center justify-center">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-[#7c6fff] to-[#a78bfa] flex items-center justify-center">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
         </div>
         <span class="font-syne text-[17px] font-extrabold tracking-tight">Doc<span class="text-[#a78bfa]">Nexus</span></span>
@@ -42,78 +54,164 @@
       <span class="text-[11px] px-3 py-1 rounded-full bg-[#7c6fff]/10 text-[#a78bfa] border border-[#7c6fff]/20 font-medium">Knowledge Fusion System</span>
     </nav>
 
-     <div class="animate-fade-up pt-14 px-6 pb-10 text-center">
-      <h1 class="text-3xl md:text-4xl font-extrabold tracking-tighter leading-tight mb-4">
-        Turn scattered docs into<br>
-        <span class="bg-gradient-to-r from-[#a78bfa] via-[#60a5fa] to-[#34d399] bg-clip-text text-transparent">one perfect knowledge base</span>
-      </h1>
-      <p class="text-[15px] text-zinc-500 max-w-[480px] mx-auto leading-relaxed">
-        Upload multiple PDFs on the same topic and get back a single, clean document automatically.
-      </p>
-    </div>
+    <div class="relative">
 
-    <div class="animate-fade-up-delayed max-w-[680px] mx-auto px-6 pb-20">
-      
-      <div id="dropZone" ondragover="event.preventDefault(); this.classList.add('bg-[#7c6fff]/10')" ondragleave="this.classList.remove('bg-[#7c6fff]/10')" ondrop="handleDrop(event)" onclick="document.getElementById('fileInput').click()" 
-           class="group border-2 border-dashed border-[#7c6fff]/30 rounded-[24px] bg-[#7c6fff]/5 p-12 text-center cursor-pointer transition-all duration-300 hover:border-[#7c6fff]/60">
-        
-        <input type="file" id="fileInput" multiple accept=".pdf" onchange="handleFiles(this.files)" class="hidden">
-        
-        <div class="w-16 h-16 rounded-2xl bg-[#7c6fff]/15 border border-[#7c6fff]/20 flex items-center justify-center mx-auto mb-5 group-hover:scale-110 transition-transform">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      <!-- ═══ UPLOAD SCREEN ═══ -->
+      <div id="uploadScreen" class="screen-shown">
+        <div class="animate-fade-up pt-14 px-6 pb-10 text-center">
+          <h1 class="text-xl md:text-2xl font-extrabold tracking-tighter leading-tight mb-4">
+            Turn scattered docs into<br>
+            <span class="bg-gradient-to-r from-[#a78bfa] via-[#60a5fa] to-[#34d399] bg-clip-text text-transparent inline-block py-1">
+              one perfect knowledge base
+            </span>
+          </h1>
+          <p class="text-[15px] text-zinc-500 max-w-[480px] mx-auto leading-relaxed">
+            Upload multiple PDFs on the same topic and get back a single, clean document automatically.
+          </p>
         </div>
-        <div class="font-syne text-lg font-bold text-zinc-200 mb-1">Drag & drop your PDFs here</div>
-        <div class="text-sm text-zinc-600 mb-6">Supports multiple PDF files</div>
-        <button class="bg-[#7c6fff] hover:bg-[#6b5eff] text-white text-sm font-semibold px-6 py-2.5 rounded-xl transition-colors shadow-lg shadow-[#7c6fff]/20" onclick="event.stopPropagation(); document.getElementById('fileInput').click()">
-          Browse Files
-        </button>
+
+        <div class="animate-fade-up-delayed max-w-[680px] mx-auto px-6 pb-20">
+
+          <!-- Drop zone -->
+          <div id="dropZone"
+               ondragover="event.preventDefault(); this.classList.add('bg-[#7c6fff]/10','border-[#7c6fff]/60')"
+               ondragleave="this.classList.remove('bg-[#7c6fff]/10','border-[#7c6fff]/60')"
+               ondrop="handleDrop(event)"
+               onclick="document.getElementById('fileInput').click()"
+               class="group border-2 border-dashed border-[#7c6fff]/30 rounded-[24px] bg-[#7c6fff]/5 p-12 text-center cursor-pointer transition-all duration-300 hover:border-[#7c6fff]/60">
+            <input type="file" id="fileInput" multiple accept=".pdf" onchange="handleFiles(this.files)" class="hidden">
+            <div class="w-16 h-16 rounded-2xl bg-[#7c6fff]/15 border border-[#7c6fff]/20 flex items-center justify-center mx-auto mb-5 group-hover:scale-110 transition-transform animate-float">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            </div>
+            <div class="font-syne text-lg font-bold text-zinc-200 mb-1">Drag & drop your PDFs here</div>
+            <div class="text-sm text-zinc-600 mb-6">Supports multiple PDF files</div>
+            <button class="bg-[#7c6fff] hover:bg-[#6b5eff] text-white text-sm font-semibold px-6 py-2.5 rounded-xl transition-colors shadow-lg shadow-[#7c6fff]/20"
+                    onclick="event.stopPropagation(); document.getElementById('fileInput').click()">
+              Browse Files
+            </button>
+          </div>
+
+          <!-- File heading -->
+          <div id="uploadHeading" class="hidden items-center gap-4 mt-12 mb-6">
+            <div class="flex-1 h-px bg-white/5"></div>
+            <span class="text-[11px] font-bold text-zinc-700 tracking-[0.2em] uppercase">Uploaded Files</span>
+            <div class="flex-1 h-px bg-white/5"></div>
+          </div>
+
+          <!-- File list -->
+          <div id="fileList" class="flex flex-col gap-3 mt-8">
+            <button id="addMoreBtn" onclick="document.getElementById('fileInput').click()"
+                    class="flex items-center gap-3 p-4 w-full border border-dashed border-white/10 rounded-2xl cursor-pointer text-zinc-500 text-sm hover:border-[#7c6fff]/40 transition-all">
+              <div class="w-6 h-6 rounded-full border border-current flex items-center justify-center">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              </div>
+              Add more documents
+            </button>
+          </div>
+
+          <!-- QP optional upload -->
+          <div class="mt-8 p-4 rounded-2xl border border-white/[0.05] bg-white/[0.02]">
+            <button onclick="toggleQPSection()" class="flex items-center justify-between w-full text-left">
+              <div class="flex items-center gap-3">
+                <div id="qpCheckIcon" class="w-5 h-5 rounded-md border border-white/10 flex items-center justify-center transition-all shrink-0">
+                  <svg id="qpCheckMark" class="hidden" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="3.5"><polyline points="20 6 9 17 4 12"/></svg>
+                </div>
+                <span class="text-[13px] text-zinc-400">Add previous-year question papers</span>
+                <span class="text-[11px] px-2 py-0.5 rounded-full bg-[#a78bfa]/10 text-[#a78bfa] border border-[#a78bfa]/20">Optional</span>
+              </div>
+              <span class="text-[11px] text-zinc-600 hidden md:block">Adds exam analysis to results</span>
+            </button>
+            <div id="qpSection" class="hidden mt-4">
+              <div ondragover="event.preventDefault()" ondrop="handleQPDrop(event)"
+                   onclick="document.getElementById('qpInput').click()"
+                   class="border border-dashed border-[#a78bfa]/25 rounded-xl p-6 text-center cursor-pointer hover:border-[#a78bfa]/50 transition-all">
+                <input type="file" id="qpInput" multiple accept=".pdf" onchange="handleQPFiles(this.files)" class="hidden">
+                <div class="text-[13px] text-zinc-500 mb-1">Drop question papers here</div>
+                <div class="text-[11px] text-zinc-700">Previous-year exams, past papers, sample papers</div>
+                <button onclick="event.stopPropagation(); document.getElementById('qpInput').click()"
+                        class="mt-3 text-[12px] px-4 py-1.5 rounded-lg border border-[#a78bfa]/30 text-[#a78bfa] hover:bg-[#a78bfa]/10 transition-colors">
+                  Browse
+                </button>
+              </div>
+              <div id="qpFileList" class="flex flex-col gap-2 mt-3"></div>
+            </div>
+          </div>
+
+          <!-- Topic label -->
+          <div class="mt-8 mb-2">
+            <label class="font-syne text-[11px] font-bold text-zinc-800 uppercase tracking-widest">Topic Label <span class="lowercase font-normal opacity-50">(optional)</span></label>
+          </div>
+          <input id="topicInput" type="text" placeholder="e.g. Machine Learning, Operating Systems..."
+                 class="w-full p-4 rounded-xl border border-white/5 bg-white/5 text-zinc-200 placeholder:text-zinc-800 outline-none focus:border-[#7c6fff]/40 focus:bg-[#7c6fff]/5 transition-all">
+
+          <!-- Stats + Start -->
+          <div class="flex flex-wrap items-end justify-between mt-10 gap-6 border-t border-white/5 pt-8">
+            <div class="flex gap-8 pb-1">
+              <div>
+                <div id="fileCount" class="font-syne text-2xl font-bold text-zinc-200 leading-tight">0</div>
+                <div class="text-[11px] text-zinc-800 font-bold uppercase tracking-wider">Documents</div>
+              </div>
+              <div>
+                <div id="totalSize" class="font-syne text-2xl font-bold text-zinc-200 leading-tight">0.0 MB</div>
+                <div class="text-[11px] text-zinc-800 font-bold uppercase tracking-wider">Total Size</div>
+              </div>
+              <div id="qpCountWrap" class="hidden">
+                <div id="qpCount" class="font-syne text-2xl font-bold text-[#a78bfa] leading-tight">0</div>
+                <div class="text-[11px] text-zinc-800 font-bold uppercase tracking-wider">QP Files</div>
+              </div>
+            </div>
+            <div class="flex flex-col items-end gap-3">
+              <div id="warnMsg" class="hidden text-[11px] font-medium text-amber-500 bg-amber-500/10 px-3 py-1.5 rounded-lg border border-amber-500/20 whitespace-nowrap">
+                Add at least 2 documents to fuse
+              </div>
+              <button id="startBtn" onclick="startFusion()" disabled
+                      class="flex items-center gap-2 px-8 py-3.5 rounded-xl bg-gradient-to-r from-[#7c6fff] to-[#a78bfa] text-white font-bold text-sm shadow-xl shadow-[#7c6fff]/20 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-20 disabled:scale-100 disabled:shadow-none transition-all">
+                Start Fusion
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+        </div>
       </div>
+      <!-- ═══ END UPLOAD SCREEN ═══ -->
 
-      <div id="uploadHeading" class="hidden items-center gap-4 mt-12 mb-6">
-        <div class="flex-1 h-px bg-white/5"></div>
-        <span class="text-[11px] font-bold text-zinc-700 tracking-[0.2em] uppercase">Uploaded Files</span>
-        <div class="flex-1 h-px bg-white/5"></div>
+      <!-- ═══ PROCESSING SCREEN ═══ -->
+      <div id="processingScreen" class="screen-hidden min-h-[85vh] flex flex-col items-center justify-center px-6 py-16">
+        <div class="relative mb-10">
+          <div class="pulse-ring absolute inset-[-12px] rounded-full bg-[#7c6fff]/15 blur-lg"></div>
+          <div class="w-20 h-20 rounded-full bg-gradient-to-br from-[#7c6fff] to-[#a78bfa] flex items-center justify-center shadow-2xl shadow-[#7c6fff]/40 relative">
+            <svg class="spin-slow" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10"/>
+            </svg>
+          </div>
+        </div>
+        <h2 class="font-syne text-xl font-bold text-zinc-100 mb-2 text-center">Fusing your knowledge base</h2>
+        <p class="text-[13px] text-zinc-500 mb-8 text-center">Analysing documents and detecting overlaps...</p>
+        <div class="w-full max-w-xs mb-8">
+          <div class="flex justify-between text-[11px] text-zinc-600 mb-1.5">
+            <span id="progressLabel">Starting...</span>
+            <span id="progressPct">0%</span>
+          </div>
+          <div class="h-1.5 bg-white/5 rounded-full overflow-hidden">
+            <div id="progressBar" class="h-full bg-gradient-to-r from-[#7c6fff] to-[#a78bfa] rounded-full transition-all duration-700" style="width:0%"></div>
+          </div>
+        </div>
+        <div class="w-full max-w-sm space-y-2" id="stepsList"></div>
+        <div class="mt-8 flex gap-8 text-center">
+          <div><div id="liveChunks" class="font-syne text-xl font-bold text-zinc-200">0</div><div class="text-[10px] text-zinc-700 uppercase tracking-wider">Chunks</div></div>
+          <div class="w-px bg-white/5"></div>
+          <div><div id="liveDupes" class="font-syne text-xl font-bold text-zinc-200">0</div><div class="text-[10px] text-zinc-700 uppercase tracking-wider">Duplicates</div></div>
+          <div class="w-px bg-white/5"></div>
+          <div><div id="liveConflicts" class="font-syne text-xl font-bold text-zinc-200">0</div><div class="text-[10px] text-zinc-700 uppercase tracking-wider">Conflicts</div></div>
+        </div>
       </div>
+      <!-- ═══ END PROCESSING SCREEN ═══ -->
 
-      <div id="fileList" class="flex flex-col gap-3 mt-8">
-  <button id="addMoreBtn" onclick="document.getElementById('fileInput').click()" class="flex items-center gap-3 p-4 w-full border border-dashed border-white/10 rounded-2xl cursor-pointer text-zinc-500 text-sm hover:border-[#7c6fff]/40 transition-all">
-    <div class="w-6 h-6 rounded-full border border-current flex items-center justify-center">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    </div>
-    Add more documents
-  </button>
-</div>
-
-      <div class="mt-10 mb-2">
-        <label class="font-syne text-[11px] font-bold text-zinc-800 uppercase tracking-widest">Topic Label <span class="lowercase font-normal opacity-50">(optional)</span></label>
-      </div>
-      <input id="topicInput" type="text" placeholder="e.g. Machine Learning, Neural Networks..." 
-             class="w-full p-4 rounded-xl border border-white/5 bg-white/5 text-zinc-200 placeholder:text-zinc-800 outline-none focus:border-[#7c6fff]/40 focus:bg-[#7c6fff]/5 transition-all">
-
-      <div class="flex flex-wrap items-end justify-between mt-10 gap-6 border-t border-white/5 pt-8">
-  <div class="flex gap-8 pb-1">
-    <div>
-      <div id="fileCount" class="font-syne text-2xl font-bold text-zinc-200 leading-tight">0</div>
-      <div class="text-[11px] text-zinc-800 font-bold uppercase tracking-wider">Documents</div>
-    </div>
-    <div>
-      <div id="totalSize" class="font-syne text-2xl font-bold text-zinc-200 leading-tight">0.0 MB</div>
-      <div class="text-[11px] text-zinc-800 font-bold uppercase tracking-wider">Total Size</div>
     </div>
   </div>
-
-  <div class="flex flex-col items-end min-h-[80px] justify-end gap-3">
-    <div id="warnMsg" class="hidden text-[11px] font-medium text-amber-500 bg-amber-500/10 px-3 py-1.5 rounded-lg border border-amber-500/20 whitespace-nowrap">
-      Add at least 2 documents to fuse
-    </div>
-    <button id="startBtn" class="flex items-center gap-2 px-8 py-3.5 rounded-xl bg-gradient-to-r from-[#7c6fff] to-[#a78bfa] text-white font-bold text-sm shadow-xl shadow-[#7c6fff]/20 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-20 disabled:scale-100 disabled:shadow-none transition-all">
-      Start Fusion
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-        <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
-      </svg>
-    </button>
-  </div>
-</div>
 
   <script src="app.js"></script>
 </body>
