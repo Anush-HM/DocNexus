@@ -109,34 +109,6 @@
             </button>
           </div>
 
-          <!-- QP optional upload -->
-          <div class="mt-8 p-4 rounded-2xl border border-white/[0.05] bg-white/[0.02]">
-            <button onclick="toggleQPSection()" class="flex items-center justify-between w-full text-left">
-              <div class="flex items-center gap-3">
-                <div id="qpCheckIcon" class="w-5 h-5 rounded-md border border-white/10 flex items-center justify-center transition-all shrink-0">
-                  <svg id="qpCheckMark" class="hidden" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="3.5"><polyline points="20 6 9 17 4 12"/></svg>
-                </div>
-                <span class="text-[13px] text-zinc-400">Add previous-year question papers</span>
-                <span class="text-[11px] px-2 py-0.5 rounded-full bg-[#a78bfa]/10 text-[#a78bfa] border border-[#a78bfa]/20">Optional</span>
-              </div>
-              <span class="text-[11px] text-zinc-600 hidden md:block">Adds exam analysis to results</span>
-            </button>
-            <div id="qpSection" class="hidden mt-4">
-              <div ondragover="event.preventDefault()" ondrop="handleQPDrop(event)"
-                   onclick="document.getElementById('qpInput').click()"
-                   class="border border-dashed border-[#a78bfa]/25 rounded-xl p-6 text-center cursor-pointer hover:border-[#a78bfa]/50 transition-all">
-                <input type="file" id="qpInput" multiple accept=".pdf" onchange="handleQPFiles(this.files)" class="hidden">
-                <div class="text-[13px] text-zinc-500 mb-1">Drop question papers here</div>
-                <div class="text-[11px] text-zinc-700">Previous-year exams, past papers, sample papers</div>
-                <button onclick="event.stopPropagation(); document.getElementById('qpInput').click()"
-                        class="mt-3 text-[12px] px-4 py-1.5 rounded-lg border border-[#a78bfa]/30 text-[#a78bfa] hover:bg-[#a78bfa]/10 transition-colors">
-                  Browse
-                </button>
-              </div>
-              <div id="qpFileList" class="flex flex-col gap-2 mt-3"></div>
-            </div>
-          </div>
-
           <!-- Topic label -->
           <div class="mt-8 mb-2">
             <label class="font-syne text-[11px] font-bold text-zinc-800 uppercase tracking-widest">Topic Label <span class="lowercase font-normal opacity-50">(optional)</span></label>
@@ -155,10 +127,7 @@
                 <div id="totalSize" class="font-syne text-2xl font-bold text-zinc-200 leading-tight">0.0 MB</div>
                 <div class="text-[11px] text-zinc-800 font-bold uppercase tracking-wider">Total Size</div>
               </div>
-              <div id="qpCountWrap" class="hidden">
-                <div id="qpCount" class="font-syne text-2xl font-bold text-[#a78bfa] leading-tight">0</div>
-                <div class="text-[11px] text-zinc-800 font-bold uppercase tracking-wider">QP Files</div>
-              </div>
+
             </div>
             <div class="flex flex-col items-end gap-3">
               <div id="warnMsg" class="hidden text-[11px] font-medium text-amber-500 bg-amber-500/10 px-3 py-1.5 rounded-lg border border-amber-500/20 whitespace-nowrap">
@@ -213,6 +182,6 @@
     </div>
   </div>
 
-  <script src="app.js"></script>
+  <script src="js/app.js"></script>
 </body>
 </html>

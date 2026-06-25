@@ -2,9 +2,6 @@
 //  DocNexus — Upload Page JS
 // ─────────────────────────────────────────────
 
-let qpEnabled = false;
-let qpFiles = [];
-
 const getFileNames = () =>
   Array.from(document.querySelectorAll('#fileList .file-card')).map(c => c.dataset.name);
 
@@ -34,12 +31,6 @@ function removeFile(btn) {
   updateStats();
 }
 
-function removeQPFile(btn, name) {
-  btn.closest('.qp-file-card').remove();
-  qpFiles = qpFiles.filter(f => f.name !== name);
-  updateQPCount();
-}
-
 function createFileCard(name, sizeMB) {
   const card = document.createElement('div');
   card.className = 'file-card flex items-center gap-4 p-4 bg-white/[0.03] border border-white/[0.06] rounded-2xl w-full';
@@ -64,27 +55,6 @@ function createFileCard(name, sizeMB) {
   return card;
 }
 
-function createQPCard(name, sizeMB) {
-  const card = document.createElement('div');
-  card.className = 'qp-file-card flex items-center gap-3 p-3 bg-[#a78bfa]/5 border border-[#a78bfa]/15 rounded-xl';
-  card.innerHTML = `
-    <div class="w-8 h-8 rounded-lg bg-[#a78bfa]/10 flex items-center justify-center shrink-0">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="1.5">
-        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
-        <polyline points="14 2 14 8 20 8"/>
-      </svg>
-    </div>
-    <div class="flex-1 min-w-0">
-      <div class="text-[12px] font-medium text-zinc-300 truncate">${name}</div>
-      <div class="text-[10px] text-zinc-600">${sizeMB} MB · Question Paper</div>
-    </div>
-    <button type="button" class="text-zinc-600 hover:text-red-400 transition-colors p-1" onclick="removeQPFile(this, '${name}')">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-      </svg>
-    </button>`;
-  return card;
-}
 
 function handleFiles(fileList) {
   if (!fileList) return;
@@ -101,42 +71,6 @@ function handleFiles(fileList) {
   document.getElementById('fileInput').value = '';
 }
 
-function handleQPFiles(fileList) {
-  if (!fileList) return;
-  const list = document.getElementById('qpFileList');
-  const existingNames = qpFiles.map(f => f.name);
-  Array.from(fileList).forEach(file => {
-    if (file.name.toLowerCase().endsWith('.pdf') && !existingNames.includes(file.name)) {
-      qpFiles.push(file);
-      const sizeMB = (file.size / 1048576).toFixed(1);
-      list.appendChild(createQPCard(file.name, sizeMB));
-    }
-  });
-  updateQPCount();
-  document.getElementById('qpInput').value = '';
-}
-
-function updateQPCount() {
-  const wrap = document.getElementById('qpCountWrap');
-  const count = document.getElementById('qpCount');
-  if (qpFiles.length > 0) {
-    wrap.classList.remove('hidden');
-    count.textContent = qpFiles.length;
-  } else {
-    wrap.classList.add('hidden');
-  }
-}
-
-function toggleQPSection() {
-  qpEnabled = !qpEnabled;
-  const section  = document.getElementById('qpSection');
-  const icon     = document.getElementById('qpCheckIcon');
-  const checkMark = document.getElementById('qpCheckMark');
-  section.classList.toggle('hidden', !qpEnabled);
-  icon.style.background   = qpEnabled ? 'rgba(124,111,255,0.15)' : '';
-  icon.style.borderColor  = qpEnabled ? 'rgba(124,111,255,0.4)'  : '';
-  checkMark.classList.toggle('hidden', !qpEnabled);
-}
 
 function handleDrop(e) {
   e.preventDefault();
@@ -144,10 +78,6 @@ function handleDrop(e) {
   handleFiles(e.dataTransfer.files);
 }
 
-function handleQPDrop(e) {
-  e.preventDefault();
-  handleQPFiles(e.dataTransfer.files);
-}
 
 // ── Processing screen ──
 const STEPS = [
@@ -209,7 +139,6 @@ function startFusion() {
   if (fileCount < 2) return;
   const topic = document.getElementById('topicInput').value.trim();
   if (topic) sessionStorage.setItem('docnexus_topic', topic);
-  sessionStorage.setItem('docnexus_has_qp', qpFiles.length > 0 ? '1' : '0');
 
   // Switch screens
   document.getElementById('uploadScreen').className = 'screen-hidden';
