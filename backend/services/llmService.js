@@ -1,12 +1,12 @@
 // backend/services/llmService.js
 // ─────────────────────────────────────────────
-//  Shared OpenAI Chat model instance, used by the
+//  Shared Gemini Chat model instance, used by the
 //  fusion engine, RAG chatbot, and study-material
 //  generators. Centralized so model/temperature
 //  tuning happens in one place.
 // ─────────────────────────────────────────────
 
-const { ChatOpenAI } = require('@langchain/openai');
+const { ChatGoogleGenerativeAI } = require('@langchain/google-genai');
 
 let chatModel = null;
 
@@ -15,17 +15,17 @@ let chatModel = null;
  */
 function getChatModel(overrides = {}) {
   if (!chatModel) {
-    chatModel = new ChatOpenAI({
-      openAIApiKey: process.env.OPENAI_API_KEY,
-      modelName: 'gpt-4o-mini', // good balance of quality/cost for fusion + RAG + generation
+    chatModel = new ChatGoogleGenerativeAI({
+      apiKey: process.env.GOOGLE_API_KEY,
+      model: 'gemini-2.5-flash', // free-tier eligible, good balance of quality/cost
       temperature: 0.3,
     });
   }
   if (Object.keys(overrides).length === 0) return chatModel;
   // Return a fresh instance when caller needs different settings (e.g. higher temp for flashcards)
-  return new ChatOpenAI({
-    openAIApiKey: process.env.OPENAI_API_KEY,
-    modelName: 'gpt-4o-mini',
+  return new ChatGoogleGenerativeAI({
+    apiKey: process.env.GOOGLE_API_KEY,
+    model: 'gemini-2.5-flash',
     temperature: 0.3,
     ...overrides,
   });

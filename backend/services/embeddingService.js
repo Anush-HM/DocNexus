@@ -1,15 +1,18 @@
 // backend/services/embeddingService.js
 // ─────────────────────────────────────────────
-//  Phase 4: Embedding Generation (LangChain.js + OpenAI)
+//  Phase 4: Embedding Generation (LangChain.js + Gemini)
 //  Converts text chunks into vector embeddings for
 //  semantic similarity search and RAG retrieval.
 // ─────────────────────────────────────────────
 
-const { OpenAIEmbeddings } = require('@langchain/openai');
+const { GoogleGenerativeAIEmbeddings } = require('@langchain/google-genai');
 
-const embeddings = new OpenAIEmbeddings({
-  openAIApiKey: process.env.OPENAI_API_KEY,
-  model: 'text-embedding-3-small', // 1536 dimensions, cheap + fast — good fit for this project
+const EMBEDDING_DIMENSIONS = 1536; // matches the Atlas Vector Search index definition
+
+const embeddings = new GoogleGenerativeAIEmbeddings({
+  apiKey: process.env.GOOGLE_API_KEY,
+  model: 'gemini-embedding-001', // outputs 3072 dims by default; truncated below to 1536
+  outputDimensionality: EMBEDDING_DIMENSIONS,
 });
 
 /**
@@ -22,17 +25,19 @@ async function embedText(text) {
 }
 
 /**
- * Embed many chunks of text in batches (OpenAI embeddings API
- * accepts arrays, this is far cheaper than one-by-one calls).
+ * Embed many chunks of text. The Gemini embedding model only accepts one
+ * input per request (unlike OpenAI's batched embeddings API), so this
+ * goes one at a time with a small concurrency cap to stay within the
+ * free-tier rate limits (15 requests/minute on Flash-family models).
  * @param {string[]} texts
  * @returns {Promise<number[][]>}
  */
-async function embedBatch(texts, batchSize = 100) {
-  const results = [];
-  for (let i = 0; i < texts.length; i += batchSize) {
-    const batch = texts.slice(i, i + batchSize);
-    const vectors = await embeddings.embedDocuments(batch);
-    results.push(...vectors);
+async function embedBatch(texts, concurrency = 5) {
+  const results = new Array(texts.length);
+  for (let i = 0; i < texts.length; i += concurrency) {
+    const slice = texts.slice(i, i + concurrency);
+    const vectors = await Promise.all(slice.map((t) => embeddings.embedQuery(t)));
+    vectors.forEach((v, j) => { results[i + j] = v; });
   }
   return results;
 }

@@ -1,14 +1,15 @@
 // backend/models/Chunk.js
 // ─────────────────────────────────────────────
 //  A semantic chunk of text from a source document,
-//  with its OpenAI embedding vector attached.
+//  with its Gemini embedding vector attached.
 //  This is the collection Atlas Vector Search indexes.
 //
 //  IMPORTANT: After this collection has data, create a
 //  Vector Search index in Atlas UI (or via API) named
 //  process.env.VECTOR_INDEX_NAME on the `embedding` field,
-//  with numDimensions: 1536 (text-embedding-3-small) and
-//  similarity: "cosine". See backend/scripts/createVectorIndex.js
+//  with numDimensions: 1536 (gemini-embedding-001, truncated from
+//  its default 3072 via outputDimensionality) and similarity: "cosine".
+//  See backend/scripts/createVectorIndex.js
 // ─────────────────────────────────────────────
 
 const mongoose = require('mongoose');

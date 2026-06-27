@@ -1,0 +1,27 @@
+# ── Dependencies ──
+node_modules/
+backend/node_modules/
+
+# ── Environment secrets ──
+.env
+backend/.env
+*.env.local
+
+# ── Uploaded files (user PDFs - don't commit real student data) ──
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# ── Logs ──
+*.log
+npm-debug.log*
+logs/
+
+# ── OS / editor junk ──
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ── Build artifacts (if you ever add a bundler) ──
+dist/
+build/

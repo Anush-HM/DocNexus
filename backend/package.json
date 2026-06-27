@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "docnexus-backend",
   "version": "1.0.0",
   "description": "DocNexus - AI-Powered Knowledge Fusion & Learning Platform (Backend)",
@@ -6,7 +6,9 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "dev:frontend": "http-server ../frontend -p 5500 -c-1",
+    "dev:all": "concurrently -n BACKEND,FRONTEND -c blue,green \"npm:dev\" \"npm:dev:frontend\""
   },
   "dependencies": {
     "express": "^4.19.2",
@@ -16,8 +18,7 @@
     "mongodb": "^6.8.0",
     "mongoose": "^8.5.1",
     "langchain": "^0.2.17",
-    "@langchain/openai": "^0.2.6",
-    "@langchain/community": "^0.2.28",
+    "@langchain/google-genai": "^0.1.4",
     "@langchain/textsplitters": "^0.0.3",
     "openai": "^4.55.0",
     "pdf-parse": "^1.1.1",
@@ -25,6 +26,8 @@
     "uuid": "^9.0.1"
   },
   "devDependencies": {
-    "nodemon": "^3.1.4"
+    "nodemon": "^3.1.4",
+    "concurrently": "^8.2.2",
+    "http-server": "^14.1.1"
   }
 }

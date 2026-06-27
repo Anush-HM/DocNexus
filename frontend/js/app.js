@@ -2,8 +2,16 @@
 //  DocNexus — Upload Page JS
 // ─────────────────────────────────────────────
 
-const getFileNames = () =>
-  Array.from(document.querySelectorAll('#fileList .file-card')).map(c => c.dataset.name);
+// ─────────────────────────────────────────────
+//  Real file tracking
+//  The visual cards in #fileList only show name/size text —
+//  they are NOT the actual File objects the browser gave us.
+//  We keep the real File objects here, keyed by name, so the
+//  upload step later has something real to send.
+// ─────────────────────────────────────────────
+const selectedFiles = new Map();      // name -> File   (study material PDFs)
+
+const getFileNames = () => Array.from(selectedFiles.keys());
 
 function updateStats() {
   const cards = document.querySelectorAll('#fileList .file-card');
@@ -27,7 +35,10 @@ function updateStats() {
 }
 
 function removeFile(btn) {
-  btn.closest('.file-card').remove();
+  const card = btn.closest('.file-card');
+  const name = card.dataset.name;
+  selectedFiles.delete(name);
+  card.remove();
   updateStats();
 }
 
@@ -64,6 +75,7 @@ function handleFiles(fileList) {
   Array.from(fileList).forEach(file => {
     if (file.name.toLowerCase().endsWith('.pdf') && !existingNames.includes(file.name)) {
       const sizeMB = (file.size / 1048576).toFixed(1);
+      selectedFiles.set(file.name, file); // keep the real File object
       list.insertBefore(createFileCard(file.name, sizeMB), addBtn);
     }
   });
@@ -79,16 +91,19 @@ function handleDrop(e) {
 }
 
 
+
 // ── Processing screen ──
+// User-facing stages only. No mention of chunking, embeddings, vectors —
+// those are internal mechanics with zero meaning to a student uploading notes.
+// Each maps to one (or more) internal backend step keys from Project.progress.step.
 const STEPS = [
-  { id: 'extract',  label: 'Extracting text from PDFs',      icon: '📄', pct: 15  },
-  { id: 'chunk',    label: 'Chunking documents',              icon: '✂️',  pct: 30  },
-  { id: 'embed',    label: 'Generating embeddings',           icon: '🔢', pct: 50  },
-  { id: 'match',    label: 'Matching topics across sources',  icon: '🔗', pct: 65  },
-  { id: 'dedupe',   label: 'Removing duplicates',             icon: '🧹', pct: 78  },
-  { id: 'conflict', label: 'Detecting conflicts',             icon: '⚠️',  pct: 88  },
-  { id: 'fuse',     label: 'Fusing knowledge base',           icon: '⚡', pct: 96  },
-  { id: 'done',     label: 'Finalising notes',                icon: '✅', pct: 100 },
+  { id: 'extract',       label: 'Reading your documents',        icon: '📄', pct: 15  },
+  { id: 'understand',    label: 'Understanding the content',     icon: '🧠', pct: 50  },
+  { id: 'match',         label: 'Finding overlapping topics',    icon: '🔗', pct: 65  },
+  { id: 'conflict',      label: 'Checking for contradictions',   icon: '⚠️',  pct: 78  },
+  { id: 'fuse',          label: 'Writing unified notes',         icon: '⚡', pct: 88  },
+  { id: 'studymaterial', label: 'Creating flashcards & quizzes',  icon: '🗂️', pct: 96  },
+  { id: 'done',          label: 'Finalising',                    icon: '✅', pct: 100 },
 ];
 
 function buildStepsList() {
@@ -134,9 +149,64 @@ function animateCounter(id, target) {
   }, 50);
 }
 
-function startFusion() {
-  const fileCount = document.querySelectorAll('#fileList .file-card').length;
-  if (fileCount < 2) return;
+// Tracks which step index we've already visually activated, so polling
+// (which can land on the same step more than once) doesn't replay animations.
+let lastStepIndex = -1;
+
+function applyStep(stepId) {
+  const idx = STEPS.findIndex(s => s.id === stepId);
+  if (idx === -1 || idx <= lastStepIndex) return;
+
+  // Mark every step between the last one we showed and this one as done,
+  // in case polling skips past a fast stage between two checks.
+  for (let j = lastStepIndex + 1; j < idx; j++) activateStep(STEPS[j].id, true);
+
+  const prev = STEPS[idx - 1];
+  if (prev) activateStep(prev.id, true);
+  activateStep(STEPS[idx].id);
+  setProgress(STEPS[idx].pct, STEPS[idx].label);
+  lastStepIndex = idx;
+}
+
+const API_BASE = 'http://localhost:5000/api/projects';
+const POLL_INTERVAL_MS = 1500;
+
+async function pollStatus(projectId) {
+  try {
+    const res = await fetch(`${API_BASE}/${projectId}/status`);
+    if (!res.ok) throw new Error('status check failed');
+    const data = await res.json();
+
+    if (data.progress?.step) applyStep(data.progress.step);
+
+    if (data.status === 'ready') {
+      activateStep('done', true);
+      setProgress(100, 'Done!');
+      if (data.stats) {
+        animateCounter('liveDupes', data.stats.duplicatesRemoved ?? 0);
+        animateCounter('liveConflicts', data.stats.conflictsFound ?? 0);
+      }
+      sessionStorage.setItem('docnexus_project_id', projectId);
+      setTimeout(() => { window.location.href = 'results.html'; }, 900);
+      return;
+    }
+
+    if (data.status === 'failed') {
+      setProgress(STEPS[Math.max(lastStepIndex, 0)]?.pct || 0, 'Something went wrong. Please try again.');
+      return; // stop polling
+    }
+
+    setTimeout(() => pollStatus(projectId), POLL_INTERVAL_MS);
+  } catch (err) {
+    console.error('[pollStatus]', err);
+    setProgress(STEPS[Math.max(lastStepIndex, 0)]?.pct || 0, 'Connection lost. Retrying...');
+    setTimeout(() => pollStatus(projectId), POLL_INTERVAL_MS * 2);
+  }
+}
+
+async function startFusion() {
+  const fileCards = document.querySelectorAll('#fileList .file-card');
+  if (fileCards.length < 2) return;
   const topic = document.getElementById('topicInput').value.trim();
   if (topic) sessionStorage.setItem('docnexus_topic', topic);
 
@@ -145,20 +215,24 @@ function startFusion() {
   document.getElementById('processingScreen').className = 'screen-shown min-h-[85vh] flex flex-col items-center justify-center px-6 py-16';
 
   buildStepsList();
-  let i = 0;
-  function runStep() {
-    if (i >= STEPS.length) { setTimeout(() => { window.location.href = 'results.html'; }, 700); return; }
-    const s = STEPS[i], prev = STEPS[i - 1];
-    if (prev) activateStep(prev.id, true);
-    activateStep(s.id);
-    setProgress(s.pct, s.label);
-    if (s.id === 'embed')    animateCounter('liveChunks', 284);
-    if (s.id === 'dedupe')   animateCounter('liveDupes', 137);
-    if (s.id === 'conflict') animateCounter('liveConflicts', 3);
-    i++;
-    setTimeout(runStep, s.id === 'done' ? 1200 : 900 + Math.random() * 400);
+  setProgress(5, STEPS[0].label);
+
+  try {
+    const formData = new FormData();
+    selectedFiles.forEach(file => formData.append('files', file));
+
+    const res = await fetch(`${API_BASE}/upload`, { method: 'POST', body: formData });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Upload failed');
+    }
+    const { projectId } = await res.json();
+
+    pollStatus(projectId);
+  } catch (err) {
+    console.error('[startFusion]', err);
+    setProgress(0, 'Upload failed. Please try again.');
   }
-  setTimeout(runStep, 400);
 }
 
 document.addEventListener('DOMContentLoaded', updateStats);
