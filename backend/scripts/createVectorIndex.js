@@ -22,7 +22,7 @@ async function main() {
     type: 'vectorSearch',
     definition: {
       fields: [
-        { type: 'vector', path: 'embedding', numDimensions: 1536, similarity: 'cosine' },
+        { type: 'vector', path: 'embedding', numDimensions: 1024, similarity: 'cosine' },
         { type: 'filter', path: 'projectId' },
       ],
     },
@@ -33,7 +33,7 @@ async function main() {
     type: 'vectorSearch',
     definition: {
       fields: [
-        { type: 'vector', path: 'embedding', numDimensions: 1536, similarity: 'cosine' },
+        { type: 'vector', path: 'embedding', numDimensions: 1024, similarity: 'cosine' },
         { type: 'filter', path: 'projectId' },
       ],
     },

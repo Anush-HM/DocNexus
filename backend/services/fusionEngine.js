@@ -84,84 +84,108 @@ function dedupeCluster(members) {
 }
 
 /**
- * STEP 3 + 4 — Conflict Detection & Knowledge Fusion (LLM-assisted)
- * For each topic cluster (after dedup), ask the LLM to:
+ * STEP 3 + 4 — Conflict Detection & Knowledge Fusion (LLM-assisted, BATCHED)
+ * Instead of one LLM call per topic cluster (which can mean 15-20+ calls
+ * for a typical upload — too many for a free-tier daily request cap),
+ * this sends SEVERAL clusters in one prompt and asks for fused results
+ * for all of them in one structured JSON response.
+ *
+ * For each cluster in the batch, asks the LLM to:
  *   1. Give the cluster a clean topic title
  *   2. Write one unified, well-written explanation citing source files
- *   3. Flag if sources genuinely contradict each other (not just word
- *      differently) and if so, describe both claims + a recommendation
+ *   3. Flag if sources genuinely contradict each other
  *
- * Returns one fusion result object per cluster.
+ * @param {Array<Array<chunk>>} dedupedClusters - each inner array is one
+ *   cluster's deduped chunks
+ * @returns {Promise<Array<fusedResult>>} one result per input cluster, in order
  */
-async function fuseCluster(deduped) {
+async function fuseClusterBatch(dedupedClusters) {
   const model = getChatModel();
 
-  const sourceBlocks = deduped
-    .map(
-      (c, idx) =>
-        `[Source ${idx + 1}: ${c.sourceFileName}${c.pageNumber ? `, page ${c.pageNumber}` : ''}]\n${c.text}`
-    )
-    .join('\n\n---\n\n');
+  const clusterBlocks = dedupedClusters
+    .map((deduped, clusterIdx) => {
+      const sourceBlocks = deduped
+        .map(
+          (c, idx) =>
+            `  [Source ${idx + 1}: ${c.sourceFileName}${c.pageNumber ? `, page ${c.pageNumber}` : ''}]\n  ${c.text}`
+        )
+        .join('\n\n  ---\n\n');
+      return `### TOPIC GROUP ${clusterIdx + 1}\n${sourceBlocks}`;
+    })
+    .join('\n\n========================================\n\n');
 
   const prompt = `You are the Knowledge Fusion Engine of DocNexus, a study-notes consolidation tool.
-You are given several excerpts from different study sources that all discuss the SAME topic.
+You are given ${dedupedClusters.length} separate TOPIC GROUPS. Each group contains several excerpts from different study sources that all discuss the SAME topic as each other (but different groups cover different topics).
 
-Your job:
+For EACH topic group, independently:
 1. Pick a short, clean topic title (3-6 words, e.g. "Deadlock", "TCP Handshake").
-2. Write ONE unified, well-organized explanation that merges all the correct information from these excerpts into clear prose (120-220 words). Do not just concatenate the excerpts — synthesize them.
-3. Determine if the excerpts genuinely CONTRADICT each other on a factual point (e.g. different numeric values, different step counts, opposing claims). Minor differences in wording or detail level are NOT conflicts.
+2. Write ONE unified, well-organized explanation that merges all the correct information from that group's excerpts into clear prose (120-220 words). Do not just concatenate the excerpts — synthesize them.
+3. Determine if that group's excerpts genuinely CONTRADICT each other on a factual point (e.g. different numeric values, different step counts, opposing claims). Minor differences in wording or detail level are NOT conflicts.
 
-Respond ONLY with strict JSON in this exact shape, no markdown fences, no extra text:
+Respond ONLY with strict JSON in this exact shape, no markdown fences, no extra text. The "results" array must have exactly ${dedupedClusters.length} entries, in the same order as the topic groups given:
 {
-  "title": "string",
-  "content": "string",
-  "hasConflict": boolean,
-  "conflict": {
-    "sourceAName": "string or null",
-    "sourceAClaim": "string or null",
-    "sourceBName": "string or null",
-    "sourceBClaim": "string or null",
-    "recommended": "string or null, which source/value is most likely correct and why"
-  }
+  "results": [
+    {
+      "title": "string",
+      "content": "string",
+      "hasConflict": boolean,
+      "conflict": {
+        "sourceAName": "string or null",
+        "sourceAClaim": "string or null",
+        "sourceBName": "string or null",
+        "sourceBClaim": "string or null",
+        "recommended": "string or null, which source/value is most likely correct and why"
+      }
+    }
+  ]
 }
-If hasConflict is false, set every field inside "conflict" to null.
+If hasConflict is false for a group, set every field inside its "conflict" to null.
 
-EXCERPTS:
-${sourceBlocks}`;
+TOPIC GROUPS:
+${clusterBlocks}`;
 
   const response = await model.invoke(prompt);
   const raw = typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
 
-  let parsed;
+  let parsedResults;
   try {
-    parsed = JSON.parse(stripCodeFences(raw));
+    const parsed = JSON.parse(stripCodeFences(raw));
+    parsedResults = Array.isArray(parsed.results) ? parsed.results : [];
   } catch (err) {
-    // Fallback: if the model didn't return clean JSON, build a degraded
-    // result so the pipeline doesn't crash on one bad cluster.
-    parsed = {
-      title: deduped[0].text.slice(0, 40).split('\n')[0],
-      content: deduped.map((c) => c.text).join(' '),
-      hasConflict: false,
-      conflict: null,
-    };
+    parsedResults = [];
   }
 
-  const sources = [...new Set(deduped.map((c) => c.sourceFileName))];
+  return dedupedClusters.map((deduped, idx) => {
+    const parsed = parsedResults[idx];
+    const sources = [...new Set(deduped.map((c) => c.sourceFileName))];
 
-  return {
-    title: parsed.title,
-    content: parsed.content,
-    sources,
-    hasConflict: !!parsed.hasConflict,
-    conflict: parsed.hasConflict
-      ? {
-          topic: parsed.title,
-          sourceA: { name: parsed.conflict.sourceAName, claim: parsed.conflict.sourceAClaim },
-          sourceB: { name: parsed.conflict.sourceBName, claim: parsed.conflict.sourceBClaim },
-          recommended: parsed.conflict.recommended,
-        }
-      : null,
-  };
+    // Fallback for a missing/malformed entry in the batch response —
+    // degrade gracefully for that one topic instead of losing the batch.
+    if (!parsed) {
+      return {
+        title: deduped[0].text.slice(0, 40).split('\n')[0],
+        content: deduped.map((c) => c.text).join(' '),
+        sources,
+        hasConflict: false,
+        conflict: null,
+      };
+    }
+
+    return {
+      title: parsed.title,
+      content: parsed.content,
+      sources,
+      hasConflict: !!parsed.hasConflict,
+      conflict: parsed.hasConflict
+        ? {
+            topic: parsed.title,
+            sourceA: { name: parsed.conflict?.sourceAName, claim: parsed.conflict?.sourceAClaim },
+            sourceB: { name: parsed.conflict?.sourceBName, claim: parsed.conflict?.sourceBClaim },
+            recommended: parsed.conflict?.recommended,
+          }
+        : null,
+    };
+  });
 }
 
 function stripCodeFences(text) {
@@ -180,26 +204,41 @@ async function runFusion(allChunks) {
   const notes = [];
   const conflicts = [];
 
-  // Process clusters with limited concurrency to avoid hammering the OpenAI API
-  const CONCURRENCY = 4;
-  for (let i = 0; i < clusters.length; i += CONCURRENCY) {
-    const batch = clusters.slice(i, i + CONCURRENCY);
-    const batchResults = await Promise.all(
-      batch.map(async (cluster) => {
-        const { deduped, duplicatesRemoved } = dedupeCluster(cluster.members);
-        totalDuplicatesRemoved += duplicatesRemoved;
-        // Skip clusters too thin to be worth a "topic" (single short chunk, one source)
-        if (deduped.length === 0) return null;
-        const fused = await fuseCluster(deduped);
-        return fused;
-      })
-    );
+  // Dedupe every cluster first (cheap, no LLM calls), then batch the
+  // LLM-requiring fusion step. Grouping several topics into ONE prompt
+  // turns what used to be "1 call per topic" (often 15-20+ calls per
+  // upload) into "1 call per ~6 topics" — comfortably inside a free-tier
+  // daily request cap (e.g. Gemini's 20/day on some projects).
+  const TOPICS_PER_BATCH = 6;
+  const CALL_DELAY_MS = 4500; // still pace between batches to respect per-minute limits too
 
-    batchResults.forEach((fused) => {
-      if (!fused) return;
-      notes.push(fused);
-      if (fused.hasConflict) conflicts.push(fused.conflict);
-    });
+  const dedupedClusters = [];
+  for (const cluster of clusters) {
+    const { deduped, duplicatesRemoved } = dedupeCluster(cluster.members);
+    totalDuplicatesRemoved += duplicatesRemoved;
+    if (deduped.length > 0) dedupedClusters.push(deduped);
+  }
+
+  for (let i = 0; i < dedupedClusters.length; i += TOPICS_PER_BATCH) {
+    const batch = dedupedClusters.slice(i, i + TOPICS_PER_BATCH);
+
+    try {
+      const fusedBatch = await fuseClusterBatch(batch);
+      fusedBatch.forEach((fused) => {
+        notes.push(fused);
+        if (fused.hasConflict) conflicts.push(fused.conflict);
+      });
+    } catch (err) {
+      // An entire batch failing after retries (e.g. sustained outage)
+      // shouldn't take down the whole upload — log it and continue with
+      // whatever other batches succeed, so the user still gets partial
+      // results instead of nothing.
+      console.error(`[fusionEngine] Batch starting at topic ${i} failed after retries, skipping:`, err.message);
+    }
+
+    if (i + TOPICS_PER_BATCH < dedupedClusters.length) {
+      await new Promise((resolve) => setTimeout(resolve, CALL_DELAY_MS));
+    }
   }
 
   const sourcesUsed = new Set(allChunks.map((c) => c.sourceFileName)).size;
@@ -212,4 +251,4 @@ async function runFusion(allChunks) {
   };
 }
 
-module.exports = { runFusion, clusterByTopic, dedupeCluster, fuseCluster };
+module.exports = { runFusion, clusterByTopic, dedupeCluster, fuseClusterBatch };

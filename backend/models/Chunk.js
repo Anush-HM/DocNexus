@@ -1,15 +1,14 @@
 // backend/models/Chunk.js
 // ─────────────────────────────────────────────
 //  A semantic chunk of text from a source document,
-//  with its Gemini embedding vector attached.
+//  with its Cohere embedding vector attached.
 //  This is the collection Atlas Vector Search indexes.
 //
 //  IMPORTANT: After this collection has data, create a
 //  Vector Search index in Atlas UI (or via API) named
 //  process.env.VECTOR_INDEX_NAME on the `embedding` field,
-//  with numDimensions: 1536 (gemini-embedding-001, truncated from
-//  its default 3072 via outputDimensionality) and similarity: "cosine".
-//  See backend/scripts/createVectorIndex.js
+//  with numDimensions: 1024 (Cohere embed-english-v3.0)
+//  and similarity: "cosine". See backend/scripts/createVectorIndex.js
 // ─────────────────────────────────────────────
 
 const mongoose = require('mongoose');
@@ -24,7 +23,7 @@ const chunkSchema = new mongoose.Schema(
 
     text: { type: String, required: true },
 
-    embedding: { type: [Number], required: true }, // length 1536
+    embedding: { type: [Number], required: true }, // length 1024
 
     // Filled in during fusion (topic matching / dedupe), optional until then
     topicLabel: { type: String, default: null },

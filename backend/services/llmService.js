@@ -1,12 +1,12 @@
 // backend/services/llmService.js
 // ─────────────────────────────────────────────
-//  Shared Gemini Chat model instance, used by the
+//  Shared Cohere Chat model instance, used by the
 //  fusion engine, RAG chatbot, and study-material
 //  generators. Centralized so model/temperature
 //  tuning happens in one place.
 // ─────────────────────────────────────────────
 
-const { ChatGoogleGenerativeAI } = require('@langchain/google-genai');
+const { ChatCohere } = require('@langchain/cohere');
 
 let chatModel = null;
 
@@ -15,18 +15,19 @@ let chatModel = null;
  */
 function getChatModel(overrides = {}) {
   if (!chatModel) {
-    chatModel = new ChatGoogleGenerativeAI({
-      apiKey: process.env.GOOGLE_API_KEY,
-      model: 'gemini-2.5-flash', // free-tier eligible, good balance of quality/cost
+    chatModel = new ChatCohere({
+      apiKey: process.env.COHERE_API_KEY,
+      model: 'command-r-plus-08-2024', // free trial tier — RAG/long-context optimized
       temperature: 0.3,
+      maxRetries: 5,
     });
   }
   if (Object.keys(overrides).length === 0) return chatModel;
-  // Return a fresh instance when caller needs different settings (e.g. higher temp for flashcards)
-  return new ChatGoogleGenerativeAI({
-    apiKey: process.env.GOOGLE_API_KEY,
-    model: 'gemini-2.5-flash',
+  return new ChatCohere({
+    apiKey: process.env.COHERE_API_KEY,
+    model: 'command-r-plus-08-2024',
     temperature: 0.3,
+    maxRetries: 5,
     ...overrides,
   });
 }

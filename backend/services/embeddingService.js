@@ -1,51 +1,58 @@
 // backend/services/embeddingService.js
 // ─────────────────────────────────────────────
-//  Phase 4: Embedding Generation (LangChain.js + Gemini)
+//  Phase 4: Embedding Generation (LangChain.js + Cohere)
 //  Converts text chunks into vector embeddings for
 //  semantic similarity search and RAG retrieval.
+//
+//  Cohere's embed-english-v3.0 outputs 1024 dimensions.
+//  Cohere requires different input_type values for documents
+//  (text being stored/indexed) vs queries (text being searched).
 // ─────────────────────────────────────────────
 
-const { GoogleGenerativeAIEmbeddings } = require('@langchain/google-genai');
+const { CohereEmbeddings } = require('@langchain/cohere');
 
-const EMBEDDING_DIMENSIONS = 1536; // matches the Atlas Vector Search index definition
+const EMBEDDING_DIMENSIONS = 1024; // embed-english-v3.0 native output size
 
-const embeddings = new GoogleGenerativeAIEmbeddings({
-  apiKey: process.env.GOOGLE_API_KEY,
-  model: 'gemini-embedding-001', // outputs 3072 dims by default; truncated below to 1536
-  outputDimensionality: EMBEDDING_DIMENSIONS,
+const documentEmbeddings = new CohereEmbeddings({
+  apiKey: process.env.COHERE_API_KEY,
+  model: 'embed-english-v3.0',
+  inputType: 'search_document', // for PDF chunks being stored/indexed
+});
+
+const queryEmbeddings = new CohereEmbeddings({
+  apiKey: process.env.COHERE_API_KEY,
+  model: 'embed-english-v3.0',
+  inputType: 'search_query', // for chatbot questions being searched
 });
 
 /**
- * Embed a single piece of text.
+ * Embed a single search query (e.g. a chatbot question).
  * @param {string} text
  * @returns {Promise<number[]>}
  */
 async function embedText(text) {
-  return embeddings.embedQuery(text);
+  return queryEmbeddings.embedQuery(text);
 }
 
 /**
- * Embed many chunks of text. The Gemini embedding model only accepts one
- * input per request (unlike OpenAI's batched embeddings API), so this
- * goes one at a time with a small concurrency cap to stay within the
- * free-tier rate limits (15 requests/minute on Flash-family models).
+ * Embed many document chunks for storage/indexing.
+ * Cohere accepts batches natively (up to 96 per call).
  * @param {string[]} texts
  * @returns {Promise<number[][]>}
  */
-async function embedBatch(texts, concurrency = 5) {
-  const results = new Array(texts.length);
-  for (let i = 0; i < texts.length; i += concurrency) {
-    const slice = texts.slice(i, i + concurrency);
-    const vectors = await Promise.all(slice.map((t) => embeddings.embedQuery(t)));
-    vectors.forEach((v, j) => { results[i + j] = v; });
+async function embedBatch(texts, batchSize = 90) {
+  const results = [];
+  for (let i = 0; i < texts.length; i += batchSize) {
+    const batch = texts.slice(i, i + batchSize);
+    const vectors = await documentEmbeddings.embedDocuments(batch);
+    results.push(...vectors);
   }
   return results;
 }
 
 /**
  * Cosine similarity between two equal-length vectors.
- * Used by the fusion engine for topic matching / dedup
- * without round-tripping through Atlas for in-memory comparisons.
+ * Used by the fusion engine for topic matching / dedup.
  */
 function cosineSimilarity(a, b) {
   let dot = 0, normA = 0, normB = 0;

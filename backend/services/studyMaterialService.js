@@ -102,16 +102,68 @@ ${context}`;
 }
 
 /**
- * Generate all study materials in one go (used right after fusion completes).
+ * Generate flashcards, quiz, revision sheet, and interview prep all in
+ * ONE LLM call instead of 4 separate ones. This is the main entry point
+ * used right after fusion completes.
+ *
+ * Why combined: 4 separate calls per upload adds up fast against a
+ * free-tier daily request cap (e.g. Gemini's per-project limit can be as
+ * low as 20/day) — on top of the calls fusion itself already makes.
+ * Combining into one call cuts this part of the pipeline from 4 requests
+ * to 1, with no real quality loss since the model has plenty of context
+ * window to produce all four outputs in one structured response.
  */
-async function generateAllStudyMaterial(notes) {
-  const [flashcards, quiz, revision, interviewPrep] = await Promise.all([
-    generateFlashcards(notes),
-    generateQuiz(notes),
-    generateRevisionSheet(notes),
-    generateInterviewPrep(notes),
-  ]);
-  return { flashcards, quiz, revision, interviewPrep };
+async function generateAllStudyMaterial(
+  notes,
+  { flashcardCount = 12, mcqCount = 5, shortCount = 5, longCount = 3, interviewCount = 10 } = {}
+) {
+  const context = buildNotesContext(notes);
+
+  const prompt = `From the study notes below, generate ALL FOUR of the following study materials in one response:
+
+1. FLASHCARDS: exactly ${flashcardCount} flashcards for active recall. Each has a clear, specific question and a concise, accurate answer (1-3 sentences). Cover a good spread of topics.
+
+2. QUIZ: ${mcqCount} multiple-choice questions (exactly 4 options each, one correct, 0-indexed answer), ${shortCount} short-answer questions (no options), and ${longCount} long-answer/essay questions (no options).
+
+3. REVISION SHEET: group related topics into logical units (e.g. "Deadlock", "CPU Scheduling") and produce 4-6 short, high-density bullet points per unit covering the most exam-important facts.
+
+4. INTERVIEW PREP: exactly ${interviewCount} interview/viva preparation questions a student might be asked about these topics, each with a model answer (2-4 sentences). Mark each as one of: "technical", "viva", "interview".
+
+Respond ONLY with strict JSON in this exact shape, no markdown fences, no extra text:
+{
+  "flashcards": [ { "q": "string", "a": "string" }, ... ],
+  "quiz": {
+    "mcq": [ { "q": "string", "options": ["string","string","string","string"], "answer": 0 }, ... ],
+    "short": [ { "q": "string" }, ... ],
+    "long": [ { "q": "string" }, ... ]
+  },
+  "revision": [ { "unit": "string", "points": ["string", ...] }, ... ],
+  "interviewPrep": [ { "q": "string", "a": "string", "category": "technical|viva|interview" }, ... ]
+}
+
+NOTES:
+${context}`;
+
+  try {
+    const parsed = await callJSON(prompt);
+    return {
+      flashcards: parsed.flashcards || [],
+      quiz: parsed.quiz || { mcq: [], short: [], long: [] },
+      revision: parsed.revision || [],
+      interviewPrep: parsed.interviewPrep || [],
+    };
+  } catch (err) {
+    // If the combined call fails entirely (e.g. sustained outage after
+    // all retries), degrade gracefully — the user still gets their notes
+    // and conflicts from fusion, just without auto-generated study aids.
+    console.error('[studyMaterialService] Combined generation failed, returning empty study material:', err.message);
+    return {
+      flashcards: [],
+      quiz: { mcq: [], short: [], long: [] },
+      revision: [],
+      interviewPrep: [],
+    };
+  }
 }
 
 module.exports = {
