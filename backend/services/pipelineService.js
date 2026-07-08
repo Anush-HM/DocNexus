@@ -18,6 +18,8 @@ const { extractTextFromPDF } = require('./pdfService');
 const { chunkPages } = require('./chunkService');
 const { embedBatch } = require('./embeddingService');
 const { runFusion } = require('./fusionEngine');
+const { renderPagesToImages, saveSelectedPages } = require('./pdfImageService');
+const { describePages } = require('./visionService');
 const { generateAllStudyMaterial } = require('./studyMaterialService');
 const { analyzeTopicFrequency } = require('./examAnalysisService');
 
@@ -110,6 +112,41 @@ async function runPipeline(projectId) {
       doc.status = 'extracted';
       await doc.save();
 
+      // ── Diagram/chart extraction ──
+      // Render pages to images, ask the vision model which pages have
+      // a diagram, then save ONLY those pages to disk (keeps storage
+      // sane — most pages are just text and don't need an image saved).
+      let pageImageUrlMap = {}; // pageNumber -> url
+      try {
+        const pageImages = await renderPagesToImages(doc.filePath, { maxPages: 30 });
+        const visualDescriptions = await describePages(pageImages);
+
+        if (visualDescriptions.length > 0) {
+          const savedImages = saveSelectedPages(
+            doc._id,
+            pageImages,
+            visualDescriptions.map((v) => v.pageNumber)
+          );
+          savedImages.forEach(({ pageNumber, url }) => {
+            pageImageUrlMap[pageNumber] = url;
+          });
+
+          // Fold the text description into that page's text too, so the
+          // fusion LLM has words to work with even where the note text
+          // needs to reference what the diagram shows.
+          visualDescriptions.forEach(({ pageNumber, description }) => {
+            const idx = pageNumber - 1;
+            if (pages[idx] !== undefined) {
+              pages[idx] += `\n\n[Diagram/Chart on this page]: ${description}`;
+            }
+          });
+        }
+      } catch (err) {
+        // Image extraction is a bonus feature — never let it fail the
+        // whole upload if Cohere vision or pdf rendering has an issue.
+        console.error(`[Pipeline] Image extraction failed for ${doc.fileName}:`, err.message);
+      }
+
       const chunked = await chunkPages(pages.length ? pages : [text]);
       chunked.forEach((c) => {
         allChunkRecords.push({
@@ -117,6 +154,7 @@ async function runPipeline(projectId) {
           pageNumber: c.pageNumber,
           sourceFileName: doc.fileName,
           sourceDocumentId: doc._id,
+          imageUrl: pageImageUrlMap[c.pageNumber] || null,
         });
       });
     }
@@ -138,6 +176,7 @@ async function runPipeline(projectId) {
         pageNumber: c.pageNumber,
         text: c.text,
         embedding: embeddings[i],
+        imageUrl: c.imageUrl,
       }))
     );
 
@@ -150,6 +189,7 @@ async function runPipeline(projectId) {
         embedding: c.embedding,
         sourceFileName: c.sourceFileName,
         pageNumber: c.pageNumber,
+        imageUrl: c.imageUrl,
       }))
     );
     await setProgress(projectId, 'conflict', 75);
@@ -171,6 +211,7 @@ async function runPipeline(projectId) {
         title: n.title,
         content: n.content,
         sources: n.sources,
+        images: n.images || [],
         hasConflict: n.hasConflict,
         conflictId: n.hasConflict ? conflictByTopic[n.title] || null : null,
         order: idx,

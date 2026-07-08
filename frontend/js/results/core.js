@@ -7,6 +7,7 @@
 // ─────────────────────────────────────────────
 
 const API_BASE = 'http://localhost:5000/api/projects';
+const SERVER_ROOT = 'http://localhost:5000'; // for static files served outside /api, e.g. /page-images
 
 const projectId = sessionStorage.getItem('docnexus_project_id');
 
@@ -197,6 +198,15 @@ function renderNotes() {
         ${note.hasConflict ? `<span class="conflict-inline shrink-0 cursor-pointer" onclick="switchTabById('conflicts')">⚠️ Conflict</span>` : ''}
       </div>
       <p>${escapeHtml(note.content)}</p>
+      ${(note.images && note.images.length > 0) ? `
+        <div class="flex flex-wrap gap-3 mt-4">
+          ${note.images.map(url => `
+            <img src="${SERVER_ROOT}${url}" alt="Diagram for ${escapeHtml(note.title)}"
+                 class="rounded-lg border border-white/10 max-h-64 object-contain cursor-pointer"
+                 onclick="window.open('${SERVER_ROOT}${url}', '_blank')" />
+          `).join('')}
+        </div>
+      ` : ''}
       <div class="flex flex-wrap gap-1 mt-3">
         ${(note.sources || []).map(s => `<span class="source-tag">${escapeHtml(s)}</span>`).join('')}
       </div>

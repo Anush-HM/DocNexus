@@ -5,6 +5,7 @@
 //  for a given question.
 // ─────────────────────────────────────────────
 
+const mongoose = require('mongoose');
 const Chunk = require('../models/Chunk');
 const QPChunk = require('../models/QPChunk');
 const { embedText } = require('./embeddingService');
@@ -28,7 +29,11 @@ async function retrieveRelevantChunks(projectId, query, k = 5) {
         queryVector,
         numCandidates: 100,
         limit: k,
-        filter: { projectId: { $eq: projectId } },
+        // projectId is stored as an ObjectId in the Chunk collection, but
+        // arrives here as a plain string from req.params — Atlas Search
+        // filter matching is type-strict, so it MUST be cast or it will
+        // silently match nothing.
+        filter: { projectId: { $eq: new mongoose.Types.ObjectId(projectId) } },
       },
     },
     {
@@ -58,7 +63,7 @@ async function retrieveRelevantQPChunks(projectId, query, k = 5) {
         queryVector,
         numCandidates: 100,
         limit: k,
-        filter: { projectId: { $eq: projectId } },
+        filter: { projectId: { $eq: new mongoose.Types.ObjectId(projectId) } },
       },
     },
     {

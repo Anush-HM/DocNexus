@@ -21,6 +21,9 @@ app.use(express.urlencoded({ extended: true }));
 // Serve the frontend statically so you can hit http://localhost:5000/ directly
 app.use(express.static(path.join(__dirname, '..', 'frontend')));
 
+// Serve saved diagram/page images so the frontend can <img src="..."> them
+app.use('/page-images', express.static(path.join(__dirname, 'uploads', 'page-images')));
+
 // API routes
 app.use('/api/projects', projectRoutes);
 

@@ -10,7 +10,14 @@
 // ─────────────────────────────────────────────
 
 require('dotenv').config();
+const dns = require('dns');
 const { MongoClient } = require('mongodb');
+
+// Same fix as config/db.js — on some Windows setups Node's resolver can't
+// reach the SRV record for mongodb+srv:// URIs (querySrv ECONNREFUSED)
+// even though the OS resolver works fine. Forcing a known-good public
+// DNS server fixes it without touching OS network settings.
+dns.setServers(['8.8.8.8', '1.1.1.1']);
 
 async function main() {
   const client = new MongoClient(process.env.MONGODB_URI);

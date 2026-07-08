@@ -158,6 +158,7 @@ ${clusterBlocks}`;
   return dedupedClusters.map((deduped, idx) => {
     const parsed = parsedResults[idx];
     const sources = [...new Set(deduped.map((c) => c.sourceFileName))];
+    const images = [...new Set(deduped.map((c) => c.imageUrl).filter(Boolean))];
 
     // Fallback for a missing/malformed entry in the batch response —
     // degrade gracefully for that one topic instead of losing the batch.
@@ -166,6 +167,7 @@ ${clusterBlocks}`;
         title: deduped[0].text.slice(0, 40).split('\n')[0],
         content: deduped.map((c) => c.text).join(' '),
         sources,
+        images,
         hasConflict: false,
         conflict: null,
       };
@@ -175,6 +177,7 @@ ${clusterBlocks}`;
       title: parsed.title,
       content: parsed.content,
       sources,
+      images,
       hasConflict: !!parsed.hasConflict,
       conflict: parsed.hasConflict
         ? {
