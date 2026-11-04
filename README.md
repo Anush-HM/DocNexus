@@ -90,7 +90,7 @@ DocNexus/
 ### 1. Install
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/Anush-HM/DocNexus.git
 cd DocNexus
 npm install            # root: live-server + concurrently
 cd backend && npm install
