@@ -10,6 +10,10 @@ const projectSchema = new mongoose.Schema(
   {
     topic: { type: String, default: '' },
 
+    // Owner (account) and a readable name for the "My projects" list
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
+    title: { type: String, default: '' },
+
     status: {
       type: String,
       enum: ['uploading', 'processing', 'ready', 'failed'],

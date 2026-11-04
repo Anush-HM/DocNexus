@@ -207,11 +207,10 @@ function buildLines(items) {
 // Text that sits inside a table or a diagram (cell contents, diagram labels) comes out as scrambled
 // fragments. Those regions are cropped as pictures by pdfImageService, so the scrambled copy is
 // dropped here and only the caption ("Table 21.2: ...") is kept as text.
-const { findTableRegions, findFigureRegions, rowsOf } = require('./tableRegions');
-const PIC_CAPTION = /^\s*(?:table|figure|fig\.)\s+\d/i;
+const { findTableRegions, findFigureRegions, findGridRegions, rowsOf } = require('./tableRegions');
+const PIC_CAPTION = /^\s*(?:\d{1,4}\s+)?(?:table|frame|figure|fig\.)\s+\d/i;
 function dropPictureText(items, page, pdfjsLib) {
   try {
-    if (!items.some((it) => typeof it.str === 'string' && PIC_CAPTION.test(it.str))) return items;
     const S = 2; // same scale pdfImageService uses for its crops
     const vp = page.getViewport({ scale: S });
     const mapped = items.map((it) => {
@@ -222,7 +221,7 @@ function dropPictureText(items, page, pdfjsLib) {
       return { it, str: it.str, x0: tr[4], x1: tr[4] + w, y1: tr[5] + h * 0.25, y0: tr[5] - h, rot: Math.abs(it.transform[1]) > Math.abs(it.transform[0]) * 0.5 };
     }).filter(Boolean);
     const flat = mapped.filter((m) => !m.rot);
-    const boxes = [...findTableRegions(flat, vp), ...findFigureRegions(flat, vp)];
+    const boxes = [...findTableRegions(flat, vp), ...findFigureRegions(flat, vp), ...findGridRegions(flat, vp)];
     if (!boxes.length) return items;
     const drop = new Set();
     for (const b of boxes) {

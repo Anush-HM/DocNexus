@@ -6,6 +6,9 @@ const SourceDocument = require('../models/SourceDocument');
 const UnifiedNote = require('../models/UnifiedNote');
 const Conflict = require('../models/Conflict');
 const StudyMaterial = require('../models/StudyMaterial');
+const fs = require('fs');
+const Chunk = require('../models/Chunk');
+const QPChunk = require('../models/QPChunk');
 const { buildNotesPdf, buildRevisionPdf } = require('../services/pdfExportService');
 const { runPipeline, processQuestionPapers } = require('../services/pipelineService');
 
@@ -25,7 +28,8 @@ async function uploadProject(req, res) {
       return res.status(400).json({ error: 'Please upload at least 2 study material PDFs.' });
     }
 
-    const project = await Project.create({ status: 'uploading' });
+    const title = materialFiles.map((f) => f.originalname.replace(/\.pdf$/i, '')).join(' + ').slice(0, 140);
+    const project = await Project.create({ status: 'uploading', userId: req.userId, title });
 
     const materialDocs = materialFiles.map((f) => ({
       projectId: project._id,
@@ -237,4 +241,52 @@ async function exportPdf(req, res) {
   }
 }
 
-module.exports = { uploadProject, getStatus, getResults, uploadQuestionPapers, getQPStatus, getStudyMaterialStatus, exportPdf };
+/** GET /api/projects -> the signed-in user's saved projects, newest first */
+async function listProjects(req, res) {
+  try {
+    const projects = await Project.find({ userId: req.userId }).sort('-createdAt')
+      .select('title status stats createdAt hasQuestionPapers progress errorMessage').lean();
+    const docs = await SourceDocument.find({ projectId: { $in: projects.map((p) => p._id) } }).select('projectId fileName type').lean();
+    const byProject = {};
+    docs.forEach((d) => { (byProject[d.projectId] = byProject[d.projectId] || []).push({ name: d.fileName, type: d.type }); });
+    res.json({
+      projects: projects.map((p) => ({
+        id: p._id,
+        title: p.title || (byProject[p._id] || []).filter((d) => d.type === 'material').map((d) => d.name.replace(/\.pdf$/i, '')).join(' + ') || 'Untitled project',
+        status: p.status,
+        progress: p.progress,
+        stats: p.stats,
+        hasQuestionPapers: p.hasQuestionPapers,
+        createdAt: p.createdAt,
+        files: byProject[p._id] || [],
+      })),
+    });
+  } catch (err) {
+    console.error('[listProjects]', err);
+    res.status(500).json({ error: 'Failed to load your projects' });
+  }
+}
+
+/** DELETE /api/projects/:id -> removes the project and everything stored for it */
+async function deleteProject(req, res) {
+  try {
+    const id = req.params.id;
+    const docs = await SourceDocument.find({ projectId: id }).select('filePath').lean();
+    await Promise.all([
+      Chunk.deleteMany({ projectId: id }),
+      QPChunk.deleteMany({ projectId: id }),
+      UnifiedNote.deleteMany({ projectId: id }),
+      Conflict.deleteMany({ projectId: id }),
+      StudyMaterial.deleteMany({ projectId: id }),
+      SourceDocument.deleteMany({ projectId: id }),
+    ]);
+    await Project.deleteOne({ _id: id });
+    docs.forEach((d) => { try { if (d.filePath) fs.unlink(d.filePath, () => {}); } catch (e) { /* file already gone */ } });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[deleteProject]', err);
+    res.status(500).json({ error: 'Failed to delete the project' });
+  }
+}
+
+module.exports = { listProjects, deleteProject, uploadProject, getStatus, getResults, uploadQuestionPapers, getQPStatus, getStudyMaterialStatus, exportPdf };

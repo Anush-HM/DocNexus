@@ -11,6 +11,7 @@ const path = require('path');
 
 const connectDB = require('./config/db');
 const projectRoutes = require('./routes/projectRoutes');
+const authRoutes = require('./routes/authRoutes');
 
 // Never let a stray error inside a background job kill the whole server:
 // log it and keep serving (the page would otherwise poll a dead server forever).
@@ -28,7 +29,7 @@ app.use(express.static(path.join(__dirname, '..', 'frontend')));
 
 // Fail fast with a clear message while the database is unreachable
 const mongoose = require('mongoose');
-app.use('/api/projects', (req, res, next) => {
+app.use(['/api/projects', '/api/auth'], (req, res, next) => {
   if (mongoose.connection.readyState !== 1) {
     return res.status(503).json({ error: 'Database not connected yet. Check the backend terminal for the MongoDB error.' });
   }
@@ -36,6 +37,7 @@ app.use('/api/projects', (req, res, next) => {
 });
 
 // API routes
+app.use('/api/auth', authRoutes);
 app.use('/api/projects', projectRoutes);
 
 // Health check

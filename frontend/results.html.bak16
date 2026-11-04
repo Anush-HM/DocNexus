@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>DocNexus — Results</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap');
+    body { font-family: 'DM Sans', sans-serif; }
+    h1, h2, h3, .font-syne { font-family: 'Syne', sans-serif; }
+    .bg-grid {
+      background-image:
+        linear-gradient(rgba(124,111,255,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(124,111,255,0.03) 1px, transparent 1px);
+      background-size: 48px 48px;
+    }
+    @keyframes fadeUp { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes slideRight { from { opacity:0; transform:translateX(16px); } to { opacity:1; transform:translateX(0); } }
+    @keyframes typingDot {
+      0%,80%,100% { transform:scale(0.6); opacity:0.4; }
+      40%          { transform:scale(1);   opacity:1; }
+    }
+    .animate-fade-up    { animation: fadeUp 0.5s ease both; }
+    .animate-slide-right { animation: slideRight 0.3s ease both; }
+    .animate-fade-in    { animation: fadeUp 0.3s ease both; }
+    .typing-dot:nth-child(1) { animation: typingDot 1.2s 0s infinite; }
+    .typing-dot:nth-child(2) { animation: typingDot 1.2s 0.2s infinite; }
+    .typing-dot:nth-child(3) { animation: typingDot 1.2s 0.4s infinite; }
+    .tab-btn { transition: all 0.2s ease; }
+    .tab-btn.active { background:rgba(124,111,255,0.15); color:#a78bfa; border-color:rgba(124,111,255,0.3); }
+    .tab-panel { display:none; }
+    .tab-panel.active { display:block; animation:fadeUp 0.3s ease both; }
+    .conflict-body { display:none; }
+    .conflict-card.expanded .conflict-body { display:block; }
+    .conflict-card.expanded .conflict-chevron { transform:rotate(180deg); }
+    .conflict-chevron { transition:transform 0.2s ease; }
+    .flashcard-wrap { perspective:800px; }
+    .flashcard-inner { transition:transform 0.5s cubic-bezier(.4,0,.2,1); transform-style:preserve-3d; position:relative; }
+    .flashcard-wrap.flipped .flashcard-inner { transform:rotateY(180deg); }
+    .flashcard-front, .flashcard-back { backface-visibility:hidden; -webkit-backface-visibility:hidden; }
+    .flashcard-back { transform:rotateY(180deg); position:absolute; inset:0; }
+    .notes-content h3 { font-family:'Syne',sans-serif; font-weight:700; font-size:15px; color:#e4e4e7; margin:20px 0 8px; }
+    .notes-body p { color:#a1a1aa; font-size:14px; line-height:1.85; margin:0 0 14px; }
+    .notes-body p:last-child { margin-bottom: 0; }
+    .notes-body strong { color:#e4e4e7; font-weight:600; }
+    .notes-body h4.note-sub { font-family:'Syne',sans-serif; font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#a78bfa; margin:18px 0 8px; }
+    .notes-body ul.note-list, .notes-body ol.note-list { margin:0 0 14px; padding-left:20px; color:#a1a1aa; font-size:14px; line-height:1.75; }
+    .notes-body ul.note-list { list-style:disc; } .notes-body ol.note-list { list-style:decimal; }
+    .notes-body li.lvl1 { margin-left:22px; list-style:circle; } .notes-body li.lvl2 { margin-left:44px; list-style:square; }
+    .notes-body li { margin-bottom:6px; } .notes-body li::marker { color:#7c6fff; }
+    .notes-content .source-tag { display:inline-block; font-size:10px; padding:2px 7px; border-radius:4px; background:rgba(124,111,255,0.1); color:#a78bfa; border:1px solid rgba(124,111,255,0.2); margin-right:4px; margin-top:6px; font-weight:500; }
+    .notes-content .conflict-inline { display:inline-block; font-size:10px; padding:2px 7px; border-radius:4px; background:rgba(245,158,11,0.1); color:#f59e0b; border:1px solid rgba(245,158,11,0.2); margin-left:4px; cursor:pointer; }
+    ::-webkit-scrollbar { width:4px; height:4px; }
+    ::-webkit-scrollbar-thumb { background:rgba(124,111,255,0.25); border-radius:2px; }
+  </style>
+</head>
+<body class="bg-[#0a0a0f] text-white min-h-screen relative overflow-x-hidden">
+  <div class="bg-grid fixed inset-0 pointer-events-none z-0"></div>
+  <div class="relative z-10">
+
+    <!-- NAV -->
+    <nav class="flex items-center justify-between px-6 md:px-10 py-4 border-b border-white/5 sticky top-0 bg-[#0a0a0f]/85 backdrop-blur-xl z-[100]">
+      <a href="index.html" class="flex items-center gap-2.5 hover:opacity-80 transition-opacity">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-[#7c6fff] to-[#a78bfa] flex items-center justify-center">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
+        </div>
+        <span class="font-syne text-[17px] font-extrabold tracking-tight">Doc<span class="text-[#a78bfa]">Nexus</span></span>
+      </a>
+      <div class="flex items-center gap-3">
+        <span id="topicBadge" class="text-[11px] px-3 py-1 rounded-full bg-[#7c6fff]/10 text-[#a78bfa] border border-[#7c6fff]/20 font-medium hidden"></span>
+        <a href="index.html" class="text-[12px] text-zinc-500 hover:text-zinc-300 transition-colors flex items-center gap-1.5">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+          New fusion
+        </a>
+      </div>
+    </nav>
+
+    <div class="max-w-[900px] mx-auto px-6 py-10 animate-fade-up">
+
+      <!-- SUMMARY CARDS -->
+      <div class="mb-10">
+        <div class="text-[11px] text-zinc-600 font-bold uppercase tracking-widest mb-3">Fusion Complete</div>
+        <h1 class="font-syne text-2xl font-extrabold text-zinc-100 mb-6">Your knowledge base is ready.</h1>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div class="bg-white/[0.03] border border-white/[0.06] rounded-2xl p-5">
+            <div class="font-syne text-3xl font-bold text-[#a78bfa] mb-1" id="statTopics">42</div>
+            <div class="text-[11px] text-zinc-600 uppercase tracking-wider font-bold">Topics merged</div>
+          </div>
+          <div class="bg-white/[0.03] border border-white/[0.06] rounded-2xl p-5">
+            <div class="font-syne text-3xl font-bold text-[#34d399] mb-1" id="statDupes">137</div>
+            <div class="text-[11px] text-zinc-600 uppercase tracking-wider font-bold">Duplicates removed</div>
+          </div>
+          <div class="bg-white/[0.03] border border-white/[0.06] rounded-2xl p-5">
+            <div class="font-syne text-3xl font-bold text-amber-400 mb-1" id="statConflicts">3</div>
+            <div class="text-[11px] text-zinc-600 uppercase tracking-wider font-bold">Conflicts found</div>
+          </div>
+          <div class="bg-white/[0.03] border border-white/[0.06] rounded-2xl p-5">
+            <div class="font-syne text-3xl font-bold text-[#60a5fa] mb-1" id="statSources">5</div>
+            <div class="text-[11px] text-zinc-600 uppercase tracking-wider font-bold">Sources used</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TABS -->
+      <div class="flex gap-2 flex-wrap mb-6">
+        <button class="tab-btn active text-[12px] font-semibold px-4 py-2 rounded-xl border border-white/[0.06] text-zinc-400" onclick="switchTab('notes',this)">📄 Unified Notes</button>
+        <button class="tab-btn text-[12px] font-semibold px-4 py-2 rounded-xl border border-white/[0.06] text-zinc-400" onclick="switchTab('conflicts',this)">⚠️ Conflicts <span id="conflictsTabBadge" class="ml-1 bg-amber-500/20 text-amber-400 text-[10px] px-1.5 py-0.5 rounded-full">0</span></button>
+        <button class="tab-btn text-[12px] font-semibold px-4 py-2 rounded-xl border border-white/[0.06] text-zinc-400" onclick="switchTab('flashcards',this)">🃏 Flashcards</button>
+        <button class="tab-btn text-[12px] font-semibold px-4 py-2 rounded-xl border border-white/[0.06] text-zinc-400" onclick="switchTab('quiz',this)">📝 Quiz</button>
+        <button class="tab-btn text-[12px] font-semibold px-4 py-2 rounded-xl border border-white/[0.06] text-zinc-400" onclick="switchTab('revision',this)">📋 Revision Sheet</button>
+        <button class="tab-btn text-[12px] font-semibold px-4 py-2 rounded-xl border border-white/[0.06] text-zinc-400 flex items-center gap-2" onclick="switchTab('chat',this)">
+          💬 Chat <span class="w-2 h-2 rounded-full bg-[#34d399] animate-pulse"></span>
+        </button>
+      </div>
+
+      <!-- NOTES -->
+      <div class="tab-panel active" id="panel-notes">
+        <div class="flex items-center justify-between mb-5">
+          <div id="notesSubtitle" class="text-[11px] text-zinc-600 uppercase tracking-widest font-bold">Loading...</div>
+          <button onclick="exportNotesPDF(this)" class="text-[12px] text-[#a78bfa] flex items-center gap-1.5 hover:opacity-80 transition-opacity">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Export PDF
+          </button>
+        </div>
+      <!-- QP OPTIONAL SECTION -->
+      <div class="mb-5">
+        <div onclick="toggleQPPanel()" class="border border-dashed border-[#a78bfa]/20 rounded-2xl p-5 flex items-center justify-between gap-4 hover:border-[#a78bfa]/40 transition-all cursor-pointer">
+          <div class="flex items-center gap-3">
+            <div class="w-9 h-9 rounded-xl bg-[#a78bfa]/10 flex items-center justify-center shrink-0">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="1.5"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+            </div>
+            <div>
+              <div class="text-[13px] font-semibold text-zinc-300">Add previous-year question papers</div>
+              <div class="text-[11px] text-zinc-600">Get exam analysis, topic frequency, and priority insights</div>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            <span class="text-[11px] px-2.5 py-1 rounded-full bg-[#a78bfa]/10 text-[#a78bfa] border border-[#a78bfa]/20 font-medium">Optional</span>
+            <svg id="qpChevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#71717a" stroke-width="2" style="transition:transform 0.2s"><polyline points="6 9 12 15 18 9"/></svg>
+          </div>
+        </div>
+        <div id="qpPanel" class="hidden mt-3 bg-white/[0.02] border border-white/[0.05] rounded-2xl p-6">
+          <div id="qpUploadArea" ondragover="event.preventDefault()" ondrop="handleResultQPDrop(event)" onclick="document.getElementById('qpResultInput').click()"
+               class="border border-dashed border-[#a78bfa]/25 rounded-xl p-8 text-center cursor-pointer hover:border-[#a78bfa]/50 transition-all mb-4">
+            <input type="file" id="qpResultInput" multiple accept=".pdf" onchange="handleResultQPFiles(this.files)" class="hidden">
+            <div class="text-[13px] text-zinc-400 mb-1">Drop your question papers here</div>
+            <div class="text-[11px] text-zinc-600 mb-3">Previous exams, sample papers, past year PDFs</div>
+            <button class="text-[12px] px-4 py-1.5 rounded-lg border border-[#a78bfa]/30 text-[#a78bfa] hover:bg-[#a78bfa]/10 transition-colors" onclick="event.stopPropagation(); document.getElementById('qpResultInput').click()">Browse</button>
+          </div>
+          <div id="qpResultFiles" class="hidden">
+            <div id="qpResultFileList" class="flex flex-col gap-2 mb-5"></div>
+          </div>
+        </div>
+      </div>
+        <div class="space-y-4" id="notesSections"></div>
+      </div>
+
+      <!-- CONFLICTS -->
+      <div class="tab-panel" id="panel-conflicts">
+        <div id="conflictsSubtitle" class="text-[11px] text-zinc-600 uppercase tracking-widest font-bold mb-5">Loading...</div>
+        <div class="space-y-3" id="conflictsList"></div>
+        <div id="conflictsAgreeNote" class="mt-6 p-5 rounded-2xl bg-[#34d399]/5 border border-[#34d399]/15 hidden">
+          <div class="text-[12px] font-semibold text-[#34d399] mb-1">All other topics agree across sources</div>
+          <div id="conflictsAgreeText" class="text-[11px] text-zinc-600"></div>
+        </div>
+      </div>
+
+      <!-- FLASHCARDS -->
+      <div class="tab-panel" id="panel-flashcards">
+        <div class="flex items-center justify-between mb-6">
+          <div id="flashcardsSubtitle" class="text-[11px] text-zinc-600 uppercase tracking-widest font-bold">Loading...</div>
+          <div class="flex items-center gap-3">
+            <span class="text-[12px] text-zinc-500"><span id="cardIndex">1</span> / <span id="cardTotal">12</span></span>
+            <button onclick="prevCard()" class="w-8 h-8 rounded-lg border border-white/10 flex items-center justify-center text-zinc-500 hover:text-zinc-300 hover:border-white/20 transition-all">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <button onclick="nextCard()" class="w-8 h-8 rounded-lg border border-white/10 flex items-center justify-center text-zinc-500 hover:text-zinc-300 hover:border-white/20 transition-all">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="flashcard-wrap cursor-pointer" onclick="this.classList.toggle('flipped')" id="flashcardWrap">
+          <div class="flashcard-inner">
+            <div class="flashcard-front bg-white/[0.03] border border-white/[0.06] rounded-2xl p-10 min-h-[220px] flex flex-col items-center justify-center text-center">
+              <div class="text-[10px] text-zinc-700 uppercase tracking-widest font-bold mb-4">Question</div>
+              <div id="cardQ" class="font-syne text-lg font-bold text-zinc-100"></div>
+              <div class="mt-6 text-[11px] text-zinc-600">Tap to reveal answer</div>
+            </div>
+            <div class="flashcard-back bg-gradient-to-br from-[#7c6fff]/10 to-[#a78bfa]/5 border border-[#7c6fff]/20 rounded-2xl p-10 min-h-[220px] flex flex-col items-center justify-center text-center">
+              <div class="text-[10px] text-[#a78bfa] uppercase tracking-widest font-bold mb-4">Answer</div>
+              <div id="cardA" class="text-[14px] text-zinc-300 leading-relaxed"></div>
+              <div class="mt-4 text-[11px] text-zinc-600">Tap to flip back</div>
+            </div>
+          </div>
+        </div>
+        <div class="flex gap-2 mt-4 flex-wrap" id="flashcardDots"></div>
+      </div>
+
+      <!-- QUIZ -->
+      <div class="tab-panel" id="panel-quiz">
+        <div class="flex items-center justify-between mb-6">
+          <div id="quizSubtitle" class="text-[11px] text-zinc-600 uppercase tracking-widest font-bold">Loading...</div>
+          <div class="flex gap-2">
+            <button onclick="setQuizType('mcq')" id="qtMcq" class="text-[11px] px-3 py-1.5 rounded-lg border border-[#7c6fff]/30 bg-[#7c6fff]/10 text-[#a78bfa] font-semibold">MCQ</button>
+            <button onclick="setQuizType('short')" id="qtShort" class="text-[11px] px-3 py-1.5 rounded-lg border border-white/10 text-zinc-500 font-semibold">Short Answer</button>
+            <button onclick="setQuizType('long')" id="qtLong" class="text-[11px] px-3 py-1.5 rounded-lg border border-white/10 text-zinc-500 font-semibold">Long Answer</button>
+          </div>
+        </div>
+        <div class="space-y-4" id="quizQuestions"></div>
+        <button onclick="checkAnswers()" class="mt-6 px-6 py-3 rounded-xl bg-gradient-to-r from-[#7c6fff] to-[#a78bfa] text-white text-sm font-bold hover:opacity-90 transition-opacity">Check Answers</button>
+      </div>
+
+      <!-- REVISION -->
+      <div class="tab-panel" id="panel-revision">
+        <div class="flex items-center justify-between mb-5">
+          <div class="text-[11px] text-zinc-600 uppercase tracking-widest font-bold">Quick revision — all key points</div>
+          <button onclick="exportRevisionPDF(this)" class="text-[12px] text-[#a78bfa] flex items-center gap-1.5 hover:opacity-80 transition-opacity">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Export
+          </button>
+        </div>
+        <div id="revisionContent" class="space-y-5"></div>
+      </div>
+
+      <!-- CHAT TAB -->
+      <div class="tab-panel" id="panel-chat">
+        <div class="flex flex-col h-[70vh] max-h-[600px] min-h-[400px] bg-white/[0.02] border border-white/[0.05] rounded-2xl overflow-hidden">
+          <!-- Header -->
+          <div class="flex items-center gap-3 px-5 py-4 border-b border-white/[0.05] shrink-0">
+            <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-[#7c6fff] to-[#a78bfa] flex items-center justify-center shrink-0">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+            </div>
+            <div class="flex-1">
+              <div class="font-syne text-[14px] font-bold text-zinc-100">Ask DocNexus</div>
+              <div class="text-[11px] text-zinc-600" id="chatSourceLabel">Answering from your fused knowledge base</div>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <div class="w-2 h-2 rounded-full bg-[#34d399] animate-pulse"></div>
+              <span class="text-[11px] text-zinc-500">Ready</span>
+            </div>
+          </div>
+          <!-- Messages -->
+          <div id="chatMessages" class="flex-1 overflow-y-auto p-5 space-y-4">
+            <div class="flex gap-3">
+              <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-[#7c6fff] to-[#a78bfa] flex items-center justify-center shrink-0 mt-0.5">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+              </div>
+              <div class="bg-white/[0.04] border border-white/[0.04] rounded-2xl rounded-tl-sm px-4 py-3 max-w-[75%]">
+                <p class="text-[13px] text-zinc-300 leading-relaxed">Hi! Ask me anything from your notes — concepts, summaries, comparisons. If you added previous-year question papers in the Unified Notes tab, ask what was asked last year or most often.</p>
+              </div>
+            </div>
+          </div>
+          <!-- Suggestions -->
+          <div id="chatSuggestions" class="px-5 pb-3 flex flex-wrap gap-2 shrink-0"></div>
+          <!-- Input -->
+          <div class="px-5 pb-5 shrink-0">
+            <div class="flex gap-2 bg-white/[0.03] border border-white/[0.08] rounded-xl overflow-hidden focus-within:border-[#7c6fff]/40 transition-colors">
+              <input id="chatInput" type="text" placeholder="Ask anything from your notes..."
+                     class="flex-1 bg-transparent px-4 py-3.5 text-[13px] text-zinc-200 placeholder:text-zinc-600 outline-none disabled:opacity-50"
+                     onkeydown="if(event.key==='Enter') sendChat()">
+              <button id="chatSendBtn" onclick="sendChat()" class="px-4 text-[#7c6fff] hover:text-[#a78bfa] transition-colors shrink-0 disabled:opacity-30 disabled:cursor-not-allowed">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+  <script src="./js/results/core.js"></script>
+  <script src="./js/results/study.js"></script>
+  <script src="./js/results/qp.js"></script>
+  <script src="./js/results/chat.js"></script>
+</body>
+</html>

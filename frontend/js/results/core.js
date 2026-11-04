@@ -14,7 +14,11 @@ const IS_LOCAL_DEV = !location.protocol.startsWith('http') ||
 const API_BASE = window.DOCNEXUS_API ||
   (IS_LOCAL_DEV ? 'http://localhost:5000/api/projects' : `${location.origin}/api/projects`);
 
-const projectId = sessionStorage.getItem('docnexus_project_id');
+const projectId = (() => {
+  const fromUrl = new URLSearchParams(location.search).get('id');
+  if (fromUrl) { try { sessionStorage.setItem('docnexus_project_id', fromUrl); } catch (e) { /* storage blocked */ } return fromUrl; }
+  return sessionStorage.getItem('docnexus_project_id');
+})();
 
 // Shared in-memory state, populated from the backend after fetch.
 // Other modules (qp.js, chat.js, study.js) read from these.

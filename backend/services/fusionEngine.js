@@ -339,7 +339,10 @@ function assignImages(clusters) {
           // the same table/figure printed in two different documents is rendered at a different size and
           // quality, so allow a looser match there (but only with the same shape)
           const ar = (a) => (a.width && a.height ? a.width / a.height : 0);
-          return e.rec.sourceFileName !== chunk.sourceFileName && d <= 10 && ar(e.rec) && Math.abs(ar(e.rec) - ar(img)) < 0.05;
+          if (e.rec.sourceFileName === chunk.sourceFileName) return false;
+          if (d <= 10 && ar(e.rec) && Math.abs(ar(e.rec) - ar(img)) < 0.05) return true;
+          // trimmed-margin hash: same figure in two documents (one crop with its caption, one without)
+          return !!(img.ph2 && e.rec.ph2 && Math.abs((e.rec.ar2 || 0) - (img.ar2 || 0)) < 0.12 && hamming(e.rec.ph2, img.ph2) <= 40);
         });
         if (!entry) {
           entry = { phash: img.phash, rec: { ...img, sourceFileName: chunk.sourceFileName }, votes: new Map() };

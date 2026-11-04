@@ -94,6 +94,37 @@ function dHash(srcCanvas) {
   return bits.toString(16).padStart(16, '0');
 }
 
+// Larger hash on the picture with its white margins trimmed: the same figure cropped slightly
+// differently (with / without caption) in two PDFs still matches, different tables do not.
+function trimmedHash(srcCanvas) {
+  const W = 160;
+  const sc = W / srcCanvas.width;
+  const H = Math.max(8, Math.round(srcCanvas.height * sc));
+  const c = createCanvas(W, H);
+  const x = c.getContext('2d');
+  x.fillStyle = '#fff'; x.fillRect(0, 0, W, H);
+  x.drawImage(srcCanvas, 0, 0, W, H);
+  const d = x.getImageData(0, 0, W, H).data;
+  let x0 = W, y0 = H, x1 = 0, y1 = 0;
+  for (let yy = 0; yy < H; yy++) for (let xx = 0; xx < W; xx++) {
+    const i = (yy * W + xx) * 4;
+    if (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114 < 215) { if (xx < x0) x0 = xx; if (xx > x1) x1 = xx; if (yy < y0) y0 = yy; if (yy > y1) y1 = yy; }
+  }
+  if (x1 <= x0 || y1 <= y0) return { ph2: null, ar2: 0 };
+  const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+  const c2 = createCanvas(16, 16);
+  const x2 = c2.getContext('2d');
+  x2.fillStyle = '#fff'; x2.fillRect(0, 0, 16, 16);
+  x2.drawImage(c, x0, y0, bw, bh, 0, 0, 16, 16);
+  const e = x2.getImageData(0, 0, 16, 16).data;
+  const g = [];
+  for (let i = 0; i < 256; i++) g.push(e[i * 4] * 0.299 + e[i * 4 + 1] * 0.587 + e[i * 4 + 2] * 0.114);
+  const mean = g.reduce((a, b) => a + b, 0) / 256;
+  let bits = 0n;
+  for (let i = 0; i < 256; i++) bits = (bits << 1n) | (g[i] < mean ? 1n : 0n);
+  return { ph2: bits.toString(16).padStart(64, '0'), ar2: bw / bh };
+}
+
 function hamming(h1, h2) {
   let x = BigInt('0x' + h1) ^ BigInt('0x' + h2);
   let n = 0;
@@ -153,7 +184,7 @@ function mergeBoxes(boxes, gap) {
 // A figure is more than its raster box: diagram labels, "Fig 3.1" captions and
 // short callouts sit on/around the picture as normal PDF text. Grow the crop box to
 // include them, so the figure is complete (and readable) instead of a bare picture.
-const { findTableRegions, findFigureRegions } = require('./tableRegions');
+const { findTableRegions, findFigureRegions, findGridRegions } = require('./tableRegions');
 const CAPTION_RE = /^\s*(fig(ure)?\.?|table|diagram|chart|graph|source|image|illustration)\b/i;
 function expandWithText(box, items, viewport) {
   const o = { ...box };          // judge every text item against the ORIGINAL picture box,
@@ -348,7 +379,7 @@ async function extractImagesFromPDF(
         // 1b) tables: crop the whole table (caption + rows) as a picture, since extracted
         // text scrambles table cells
         const pageText = pageTexts[pageNum - 1] || '';
-        if (/\b(?:table|fig(?:ure|\.)?)\s+\d/i.test(pageText)) {
+        if (pageText.length > 150) { // any text page: captioned tables/figures, and uncaptioned grids of short aligned cells
           try {
             const tc2 = await page.getTextContent();
             const titems = tc2.items
@@ -359,7 +390,7 @@ async function extractImagesFromPDF(
                 const w = Math.max(4, (it.width || 0) * RENDER_SCALE);
                 return { str: it.str, x0: tr[4], x1: tr[4] + w, y1: tr[5] + h * 0.25, y0: tr[5] - h };
               });
-            for (const tb of [...findTableRegions(titems, viewport), ...findFigureRegions(titems, viewport)]) {
+            for (const tb of [...findTableRegions(titems, viewport), ...findFigureRegions(titems, viewport), ...findGridRegions(titems, viewport)]) {
               const tArea = (tb.x1 - tb.x0) * (tb.y1 - tb.y0);
               const overlap = regions.some((r) => {
                 const ix = Math.min(r.box.x1, tb.x1) - Math.max(r.box.x0, tb.x0);
@@ -420,6 +451,7 @@ async function extractImagesFromPDF(
 
           const buf = out.toBuffer('image/jpeg', JPEG_QUALITY);
           const phash = dHash(out);
+          const { ph2, ar2 } = trimmedHash(out);
           const hash = crypto.createHash('sha1').update(buf).digest('hex');
           if (!hashPages.has(hash)) hashPages.set(hash, new Set());
           hashPages.get(hash).add(pageNum);
@@ -432,6 +464,8 @@ async function extractImagesFromPDF(
             kind,
             _hash: hash,
             phash,
+            ph2,
+            ar2,
           });
         }
       } finally {

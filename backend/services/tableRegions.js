@@ -3,7 +3,7 @@
 // positions of text items, so the whole table can be cropped as a picture.
 // Plain-text extraction scrambles table cells; the picture is always correct.
 
-const CAPTION = /^\s*table\s+\d+[A-Z]?(?:[.\-]\d+)*\b/i;
+const CAPTION = /^\s*(?:\d{1,4}\s+)?(?:table|frame)\s+\d+[A-Z]?(?:[.\-]\d+)*\b/i;
 
 function rowsOf(items, W) {
   const sorted = [...items].sort((a, b) => (a.y1 + a.y0) / 2 - (b.y1 + b.y0) / 2 || a.x0 - b.x0);
@@ -87,7 +87,7 @@ function findTableRegions(items, viewport) {
   return out;
 }
 
-const FIG_CAPTION = /^\s*(?:figure|fig\.)\s+\d+[A-Z]?(?:[.\-]\d+)*\s*[:.\u2013\-]/i;
+const FIG_CAPTION = /^\s*(?:\d{1,4}\s+)?(?:figure|fig\.)\s+\d+[A-Z]?(?:[.\-]\d+)*\s*[:.\u2013\-]/i;
 
 /**
  * Diagrams drawn with vector graphics have no image to find. Their caption
@@ -132,4 +132,65 @@ function findFigureRegions(items, viewport) {
   return out;
 }
 
-module.exports = { findTableRegions, findFigureRegions, rowsOf };
+// ─────────────────────────────────────────────
+//  Tables WITHOUT a "Table N" caption: several consecutive rows made of short cells that
+//  line up in the same columns (a summary table in a notes document, a filled-in form...).
+// ─────────────────────────────────────────────
+const MARKER = /^(?:[\u2022\u25AA\u25A0\u25CF\u25E6\u25CB\u25AB\u00B7\-\u2013o]|\(?\d{1,2}[.)]|\(?[a-z][.)])$/;
+
+function cellsOfRow(r) {
+  const h = r.y1 - r.y0 || 10;
+  const cells = [];
+  let cur = [r.items[0]];
+  for (let i = 1; i < r.items.length; i++) {
+    if (r.items[i].x0 - r.items[i - 1].x1 > h * 0.9) { cells.push(cur); cur = []; }
+    cur.push(r.items[i]);
+  }
+  cells.push(cur);
+  return cells
+    .map((c) => ({ x0: c[0].x0, x1: c[c.length - 1].x1, text: c.map((i) => i.str).join(' ').replace(/\s+/g, ' ').trim() }))
+    .filter((c) => c.text && !MARKER.test(c.text)); // bullet glyphs / "1." markers are not columns
+}
+
+function findGridRegions(items, viewport) {
+  const rows = rowsOf(items, viewport.width);
+  rows.forEach((r) => { r.cl = cellsOfRow(r); });
+  const isRow = (r) => r.cl.length >= 2 && r.cl.every((c) => c.text.length <= 70) && r.cl.reduce((n, c) => n + c.text.length, 0) / r.cl.length <= 45;
+  const out = [];
+  let i = 0;
+  while (i < rows.length) {
+    if (!isRow(rows[i])) { i++; continue; }
+    let j = i;
+    let last = i;
+    let miss = 0;
+    while (j + 1 < rows.length) {
+      const nxt = rows[j + 1];
+      const gap = nxt.y0 - rows[j].y1;
+      if (gap > (rows[j].y1 - rows[j].y0) * 2.2) break;
+      if (isRow(nxt)) { j++; last = j; miss = 0; }
+      else if (nxt.text.length <= 45 && miss < 1) { j++; miss++; } // wrapped cell text
+      else break;
+    }
+    const run = rows.slice(i, last + 1).filter(isRow);
+    if (run.length >= 4) {
+      // columns = cell start positions shared by most rows
+      const hist = new Map();
+      run.forEach((r) => new Set(r.cl.map((c) => Math.round(c.x0 / 12))).forEach((k) => hist.set(k, (hist.get(k) || 0) + 1)));
+      const anchors = [...hist.entries()].filter(([, n]) => n >= run.length * 0.5).map(([k]) => k);
+      const aligned = run.filter((r) => r.cl.filter((c) => anchors.some((a) => Math.abs(a - Math.round(c.x0 / 12)) <= 1)).length >= 2).length;
+      const sel = rows.slice(i, last + 1);
+      const box = {
+        x0: Math.max(0, Math.min(...sel.map((r) => r.x0)) - 10),
+        x1: Math.min(viewport.width, Math.max(...sel.map((r) => r.x1)) + 10),
+        y0: Math.max(0, Math.min(...sel.map((r) => r.y0)) - 8),
+        y1: Math.min(viewport.height, Math.max(...sel.map((r) => r.y1)) + 8),
+        kind: 'table',
+      };
+      if (anchors.length >= 2 && aligned / run.length >= 0.7 && box.y1 - box.y0 < viewport.height * 0.75) out.push(box);
+    }
+    i = last + 1;
+  }
+  return out;
+}
+
+module.exports = { findTableRegions, findFigureRegions, findGridRegions, rowsOf };

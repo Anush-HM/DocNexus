@@ -5,9 +5,27 @@ const express = require('express');
 const router = express.Router();
 
 const upload = require('../utils/uploadMiddleware');
-const { uploadProject, getStatus, getResults, uploadQuestionPapers, getQPStatus, getStudyMaterialStatus, exportPdf } = require('../controllers/projectController');
+const mongoose = require('mongoose');
+const Project = require('../models/Project');
+const { requireAuth } = require('../services/authService');
+const { listProjects, deleteProject, uploadProject, getStatus, getResults, uploadQuestionPapers, getQPStatus, getStudyMaterialStatus, exportPdf } = require('../controllers/projectController');
 const { askQuestion } = require('../controllers/chatController');
 const { getExamAnalysis, askExamQuestion } = require('../controllers/examController');
+
+// Every project route needs a signed-in user, and a project can only be opened by its owner.
+router.use(requireAuth);
+router.param('id', async (req, res, next, id) => {
+  try {
+    if (!mongoose.isValidObjectId(id)) return res.status(404).json({ error: 'Project not found' });
+    const owned = await Project.exists({ _id: id, userId: req.userId });
+    if (!owned) return res.status(404).json({ error: 'Project not found' });
+    next();
+  } catch (e) { next(e); }
+});
+
+// GET /api/projects  -> my saved projects;  DELETE /api/projects/:id
+router.get('/', listProjects);
+router.delete('/:id', deleteProject);
 
 // POST /api/projects/upload
 router.post(

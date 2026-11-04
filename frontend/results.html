@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <link rel="icon" href="assets/logo-v2.jpg">
   <title>DocNexus — Results</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
@@ -62,13 +63,13 @@
     <!-- NAV -->
     <nav class="flex items-center justify-between px-6 md:px-10 py-4 border-b border-white/5 sticky top-0 bg-[#0a0a0f]/85 backdrop-blur-xl z-[100]">
       <a href="index.html" class="flex items-center gap-2.5 hover:opacity-80 transition-opacity">
-        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-[#7c6fff] to-[#a78bfa] flex items-center justify-center">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>
-        </div>
+        <img src="assets/logo-v2.jpg" alt="DocNexus" class="h-9 w-9 rounded-lg bg-white object-cover">
         <span class="font-syne text-[17px] font-extrabold tracking-tight">Doc<span class="text-[#a78bfa]">Nexus</span></span>
       </a>
       <div class="flex items-center gap-3">
         <span id="topicBadge" class="text-[11px] px-3 py-1 rounded-full bg-[#7c6fff]/10 text-[#a78bfa] border border-[#7c6fff]/20 font-medium hidden"></span>
+        <a href="projects.html" class="text-[12px] text-zinc-400 hover:text-zinc-100 transition-colors">My projects</a>
+        <div id="userBox" class="flex items-center gap-2"></div>
         <a href="index.html" class="text-[12px] text-zinc-500 hover:text-zinc-300 transition-colors flex items-center gap-1.5">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
           New fusion
@@ -269,6 +270,8 @@
 
     </div>
   </div>
+  <script src="./js/auth.js"></script>
+  <script>DocAuth.require() && DocAuth.mount(document.getElementById('userBox'));</script>
   <script src="./js/results/core.js"></script>
   <script src="./js/results/study.js"></script>
   <script src="./js/results/qp.js"></script>
