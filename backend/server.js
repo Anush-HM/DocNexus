@@ -8,6 +8,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 
 const connectDB = require('./config/db');
 const projectRoutes = require('./routes/projectRoutes');
@@ -24,8 +25,10 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve the frontend statically so you can hit http://localhost:5000/ directly
-app.use(express.static(path.join(__dirname, '..', 'frontend')));
+// Serve the built React app (frontend/dist, created by `npm run build`) so you can hit
+// http://localhost:5000/ directly. During development use the Vite dev server instead.
+const FRONTEND_DIST = path.join(__dirname, '..', 'frontend', 'dist');
+if (fs.existsSync(FRONTEND_DIST)) app.use(express.static(FRONTEND_DIST));
 
 // Fail fast with a clear message while the database is unreachable
 const mongoose = require('mongoose');
@@ -42,6 +45,13 @@ app.use('/api/projects', projectRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => res.json({ ok: true }));
+
+// Single-page app: any non-API page request gets index.html so React Router can handle it
+app.get(/^\/(?!api\/).*/, (req, res, next) => {
+  const index = path.join(FRONTEND_DIST, 'index.html');
+  if (fs.existsSync(index)) return res.sendFile(index);
+  next();
+});
 
 // Centralized error handler (catches multer errors etc.)
 app.use((err, req, res, next) => {

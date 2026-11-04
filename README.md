@@ -54,7 +54,7 @@ Upload several PDFs on the same topic. DocNexus merges them into a single, clean
 - **Database:** MongoDB Atlas (+ Atlas Vector Search)
 - **AI:** Cohere (embeddings, generation, chat) through LangChain
 - **PDF:** pdfjs-dist, pdf-parse, PDFKit, @napi-rs/canvas
-- **Frontend:** vanilla JavaScript, HTML, Tailwind CSS (CDN)
+- **Frontend:** React 18, Vite, React Router, Tailwind CSS
 - **Auth:** Node `crypto` only — scrypt password hashing and HMAC-signed tokens
 
 ## 📁 Project structure
@@ -70,13 +70,17 @@ DocNexus/
 │   ├── services/             # Pipeline, fusion engine, RAG, PDF, exam analysis, auth
 │   ├── scripts/              # One-off scripts (e.g. vector index creation)
 │   └── uploads/              # Uploaded PDFs — created automatically (git-ignored)
-└── frontend/
-    ├── index.html            # Upload page
-    ├── results.html          # Notes, conflicts, study material, chat
-    ├── projects.html         # My projects
-    ├── login.html            # Sign in / create account
-    ├── assets/               # Logo
-    └── js/                   # app.js, auth.js, results/*
+└── frontend/                 # React app (Vite)
+    ├── index.html
+    ├── vite.config.js        # dev server + /api proxy to the backend
+    ├── tailwind.config.js
+    ├── public/               # Logo
+    └── src/
+        ├── main.jsx, App.jsx # Entry point and routes
+        ├── pages/            # Login, Upload, Projects, Results
+        ├── results/          # Notes, Conflicts, Study tabs, Chat, Question papers
+        ├── components/       # Layout / navbar
+        └── lib/              # API helper, auth context, note formatting
 ```
 
 ## 🚀 Getting started
@@ -92,8 +96,7 @@ DocNexus/
 ```bash
 git clone https://github.com/Anush-HM/DocNexus.git
 cd DocNexus
-npm install            # root: live-server + concurrently
-cd backend && npm install
+npm run install:all    # root, backend and frontend dependencies
 ```
 
 ### 2. Configure
@@ -135,15 +138,19 @@ Chat works without them (it falls back to in-memory search), but Atlas Vector Se
 From the project root:
 
 ```bash
-npm run dev       # backend (nodemon) + frontend (live-server)
+npm run dev       # backend (nodemon, port 5000) + React dev server (port 5173)
 ```
+
+Open **http://localhost:5173**. The dev server forwards `/api` calls to the backend.
 
 Or run them separately:
 
 ```bash
 npm run backend   # API on http://localhost:5000
-npm run frontend  # static site served by live-server
+npm run frontend  # React dev server on http://localhost:5173
 ```
+
+**Production build:** `npm run build` creates `frontend/dist`, and the backend then serves the whole app at http://localhost:5000.
 
 > 📂 You don't need to create `backend/uploads/` yourself — the backend creates it automatically on first start.
 
