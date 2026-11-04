@@ -7,6 +7,9 @@
 Upload several PDFs on the same topic. DocNexus merges them into a single, clean set of notes — duplicates removed, conflicts flagged, diagrams and tables kept — then adds flashcards, a quiz, a revision sheet, an AI tutor, and previous-year question-paper analysis.
 
 ![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933?logo=node.js&logoColor=white)
+![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
+![Vite](https://img.shields.io/badge/Vite-5-646CFF?logo=vite&logoColor=white)
+![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-3-06B6D4?logo=tailwindcss&logoColor=white)
 ![Express](https://img.shields.io/badge/Express-4-000000?logo=express)
 ![MongoDB Atlas](https://img.shields.io/badge/MongoDB-Atlas-47A248?logo=mongodb&logoColor=white)
 ![Cohere](https://img.shields.io/badge/AI-Cohere-39594D)
