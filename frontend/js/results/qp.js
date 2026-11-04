@@ -183,7 +183,7 @@ function renderExamTopics(topics) {
       ${topics.slice(0, 8).map((t, i) => `
         <div class="flex items-center gap-3">
           <div class="text-[12px] text-zinc-400 w-4 font-bold">${i + 1}</div>
-          <div class="flex-1 text-[13px] text-zinc-300">${escapeHtml(t.topic)}</div>
+          <div class="flex-1 text-[13px] text-zinc-300">${escapeHtml(t.topic)}${(t.papers || []).length ? `<div class="text-[10px] text-zinc-500 mt-0.5">${t.papers.length > 1 ? 'Recurring · ' : ''}${t.papers.map(p => escapeHtml(String(p.year || p.name).replace(/\.pdf$/i, '')) + (p.count > 1 ? ' ×' + p.count : '')).join(' · ')}</div>` : ''}</div>
           <div class="text-[11px] text-[#a78bfa] font-bold">${t.count}×</div>
           <div class="w-24 h-1.5 bg-white/5 rounded-full overflow-hidden">
             <div class="h-full bg-[#a78bfa] rounded-full" style="width:${Math.round((t.count / maxCount) * 100)}%"></div>

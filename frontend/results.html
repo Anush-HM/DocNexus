@@ -41,7 +41,14 @@
     .flashcard-front, .flashcard-back { backface-visibility:hidden; -webkit-backface-visibility:hidden; }
     .flashcard-back { transform:rotateY(180deg); position:absolute; inset:0; }
     .notes-content h3 { font-family:'Syne',sans-serif; font-weight:700; font-size:15px; color:#e4e4e7; margin:20px 0 8px; }
-    .notes-content p  { color:#71717a; font-size:14px; line-height:1.75; margin-bottom:12px; }
+    .notes-body p { color:#a1a1aa; font-size:14px; line-height:1.85; margin:0 0 14px; }
+    .notes-body p:last-child { margin-bottom: 0; }
+    .notes-body strong { color:#e4e4e7; font-weight:600; }
+    .notes-body h4.note-sub { font-family:'Syne',sans-serif; font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#a78bfa; margin:18px 0 8px; }
+    .notes-body ul.note-list, .notes-body ol.note-list { margin:0 0 14px; padding-left:20px; color:#a1a1aa; font-size:14px; line-height:1.75; }
+    .notes-body ul.note-list { list-style:disc; } .notes-body ol.note-list { list-style:decimal; }
+    .notes-body li.lvl1 { margin-left:22px; list-style:circle; } .notes-body li.lvl2 { margin-left:44px; list-style:square; }
+    .notes-body li { margin-bottom:6px; } .notes-body li::marker { color:#7c6fff; }
     .notes-content .source-tag { display:inline-block; font-size:10px; padding:2px 7px; border-radius:4px; background:rgba(124,111,255,0.1); color:#a78bfa; border:1px solid rgba(124,111,255,0.2); margin-right:4px; margin-top:6px; font-weight:500; }
     .notes-content .conflict-inline { display:inline-block; font-size:10px; padding:2px 7px; border-radius:4px; background:rgba(245,158,11,0.1); color:#f59e0b; border:1px solid rgba(245,158,11,0.2); margin-left:4px; cursor:pointer; }
     ::-webkit-scrollbar { width:4px; height:4px; }
@@ -95,8 +102,29 @@
         </div>
       </div>
 
+      <!-- TABS -->
+      <div class="flex gap-2 flex-wrap mb-6">
+        <button class="tab-btn active text-[12px] font-semibold px-4 py-2 rounded-xl border border-white/[0.06] text-zinc-400" onclick="switchTab('notes',this)">📄 Unified Notes</button>
+        <button class="tab-btn text-[12px] font-semibold px-4 py-2 rounded-xl border border-white/[0.06] text-zinc-400" onclick="switchTab('conflicts',this)">⚠️ Conflicts <span id="conflictsTabBadge" class="ml-1 bg-amber-500/20 text-amber-400 text-[10px] px-1.5 py-0.5 rounded-full">0</span></button>
+        <button class="tab-btn text-[12px] font-semibold px-4 py-2 rounded-xl border border-white/[0.06] text-zinc-400" onclick="switchTab('flashcards',this)">🃏 Flashcards</button>
+        <button class="tab-btn text-[12px] font-semibold px-4 py-2 rounded-xl border border-white/[0.06] text-zinc-400" onclick="switchTab('quiz',this)">📝 Quiz</button>
+        <button class="tab-btn text-[12px] font-semibold px-4 py-2 rounded-xl border border-white/[0.06] text-zinc-400" onclick="switchTab('revision',this)">📋 Revision Sheet</button>
+        <button class="tab-btn text-[12px] font-semibold px-4 py-2 rounded-xl border border-white/[0.06] text-zinc-400 flex items-center gap-2" onclick="switchTab('chat',this)">
+          💬 Chat <span class="w-2 h-2 rounded-full bg-[#34d399] animate-pulse"></span>
+        </button>
+      </div>
+
+      <!-- NOTES -->
+      <div class="tab-panel active" id="panel-notes">
+        <div class="flex items-center justify-between mb-5">
+          <div id="notesSubtitle" class="text-[11px] text-zinc-600 uppercase tracking-widest font-bold">Loading...</div>
+          <button onclick="exportNotesPDF(this)" class="text-[12px] text-[#a78bfa] flex items-center gap-1.5 hover:opacity-80 transition-opacity">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Export PDF
+          </button>
+        </div>
       <!-- QP OPTIONAL SECTION -->
-      <div class="mb-8">
+      <div class="mb-5">
         <div onclick="toggleQPPanel()" class="border border-dashed border-[#a78bfa]/20 rounded-2xl p-5 flex items-center justify-between gap-4 hover:border-[#a78bfa]/40 transition-all cursor-pointer">
           <div class="flex items-center gap-3">
             <div class="w-9 h-9 rounded-xl bg-[#a78bfa]/10 flex items-center justify-center shrink-0">
@@ -125,28 +153,6 @@
           </div>
         </div>
       </div>
-
-      <!-- TABS -->
-      <div class="flex gap-2 flex-wrap mb-6">
-        <button class="tab-btn active text-[12px] font-semibold px-4 py-2 rounded-xl border border-white/[0.06] text-zinc-400" onclick="switchTab('notes',this)">📄 Unified Notes</button>
-        <button class="tab-btn text-[12px] font-semibold px-4 py-2 rounded-xl border border-white/[0.06] text-zinc-400" onclick="switchTab('conflicts',this)">⚠️ Conflicts <span id="conflictsTabBadge" class="ml-1 bg-amber-500/20 text-amber-400 text-[10px] px-1.5 py-0.5 rounded-full">0</span></button>
-        <button class="tab-btn text-[12px] font-semibold px-4 py-2 rounded-xl border border-white/[0.06] text-zinc-400" onclick="switchTab('flashcards',this)">🃏 Flashcards</button>
-        <button class="tab-btn text-[12px] font-semibold px-4 py-2 rounded-xl border border-white/[0.06] text-zinc-400" onclick="switchTab('quiz',this)">📝 Quiz</button>
-        <button class="tab-btn text-[12px] font-semibold px-4 py-2 rounded-xl border border-white/[0.06] text-zinc-400" onclick="switchTab('revision',this)">📋 Revision Sheet</button>
-        <button class="tab-btn text-[12px] font-semibold px-4 py-2 rounded-xl border border-white/[0.06] text-zinc-400 flex items-center gap-2" onclick="switchTab('chat',this)">
-          💬 Chat <span class="w-2 h-2 rounded-full bg-[#34d399] animate-pulse"></span>
-        </button>
-      </div>
-
-      <!-- NOTES -->
-      <div class="tab-panel active" id="panel-notes">
-        <div class="flex items-center justify-between mb-5">
-          <div id="notesSubtitle" class="text-[11px] text-zinc-600 uppercase tracking-widest font-bold">Loading...</div>
-          <button onclick="exportNotesPDF()" class="text-[12px] text-[#a78bfa] flex items-center gap-1.5 hover:opacity-80 transition-opacity">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            Export PDF
-          </button>
-        </div>
         <div class="space-y-4" id="notesSections"></div>
       </div>
 
@@ -209,7 +215,7 @@
       <div class="tab-panel" id="panel-revision">
         <div class="flex items-center justify-between mb-5">
           <div class="text-[11px] text-zinc-600 uppercase tracking-widest font-bold">Quick revision — all key points</div>
-          <button onclick="exportRevisionPDF()" class="text-[12px] text-[#a78bfa] flex items-center gap-1.5 hover:opacity-80 transition-opacity">
+          <button onclick="exportRevisionPDF(this)" class="text-[12px] text-[#a78bfa] flex items-center gap-1.5 hover:opacity-80 transition-opacity">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             Export
           </button>
@@ -241,17 +247,12 @@
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
               </div>
               <div class="bg-white/[0.04] border border-white/[0.04] rounded-2xl rounded-tl-sm px-4 py-3 max-w-[75%]">
-                <p class="text-[13px] text-zinc-300 leading-relaxed">Hi! Ask me anything from your fused knowledge base — concepts, summaries, comparisons, or what was in the conflicts.</p>
+                <p class="text-[13px] text-zinc-300 leading-relaxed">Hi! Ask me anything from your notes — concepts, summaries, comparisons. If you added previous-year question papers in the Unified Notes tab, ask what was asked last year or most often.</p>
               </div>
             </div>
           </div>
           <!-- Suggestions -->
-          <div id="chatSuggestions" class="px-5 pb-3 flex flex-wrap gap-2 shrink-0">
-            <button onclick="sendSuggestion(this)" class="text-[11px] px-3 py-1.5 rounded-xl border border-white/10 text-zinc-400 hover:border-[#7c6fff]/40 hover:text-[#a78bfa] transition-all disabled:opacity-30 disabled:cursor-not-allowed">Explain Deadlock</button>
-            <button onclick="sendSuggestion(this)" class="text-[11px] px-3 py-1.5 rounded-xl border border-white/10 text-zinc-400 hover:border-[#7c6fff]/40 hover:text-[#a78bfa] transition-all disabled:opacity-30 disabled:cursor-not-allowed">What are the conflicts?</button>
-            <button onclick="sendSuggestion(this)" class="text-[11px] px-3 py-1.5 rounded-xl border border-white/10 text-zinc-400 hover:border-[#7c6fff]/40 hover:text-[#a78bfa] transition-all disabled:opacity-30 disabled:cursor-not-allowed">Most important topics?</button>
-            <button onclick="sendSuggestion(this)" class="text-[11px] px-3 py-1.5 rounded-xl border border-white/10 text-zinc-400 hover:border-[#7c6fff]/40 hover:text-[#a78bfa] transition-all disabled:opacity-30 disabled:cursor-not-allowed">Summarise CPU Scheduling</button>
-          </div>
+          <div id="chatSuggestions" class="px-5 pb-3 flex flex-wrap gap-2 shrink-0"></div>
           <!-- Input -->
           <div class="px-5 pb-5 shrink-0">
             <div class="flex gap-2 bg-white/[0.03] border border-white/[0.08] rounded-xl overflow-hidden focus-within:border-[#7c6fff]/40 transition-colors">

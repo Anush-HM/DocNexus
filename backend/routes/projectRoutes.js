@@ -5,7 +5,7 @@ const express = require('express');
 const router = express.Router();
 
 const upload = require('../utils/uploadMiddleware');
-const { uploadProject, getStatus, getResults, uploadQuestionPapers, getQPStatus } = require('../controllers/projectController');
+const { uploadProject, getStatus, getResults, uploadQuestionPapers, getQPStatus, getStudyMaterialStatus, exportPdf } = require('../controllers/projectController');
 const { askQuestion } = require('../controllers/chatController');
 const { getExamAnalysis, askExamQuestion } = require('../controllers/examController');
 
@@ -24,6 +24,7 @@ router.get('/:id/status', getStatus);
 
 // GET /api/projects/:id/results
 router.get('/:id/results', getResults);
+router.get('/:id/export/:kind', exportPdf);
 
 // POST /api/projects/:id/question-papers  (uploaded later, from results.html)
 router.post(
@@ -34,6 +35,9 @@ router.post(
 
 // GET /api/projects/:id/qp-status
 router.get('/:id/qp-status', getQPStatus);
+
+// GET /api/projects/:id/study-material-status
+router.get('/:id/study-material-status', getStudyMaterialStatus);
 
 // POST /api/projects/:id/chat
 router.post('/:id/chat', askQuestion);

@@ -6,8 +6,13 @@
 //  on the globals declared here.
 // ─────────────────────────────────────────────
 
-const API_BASE = 'http://localhost:5000/api/projects';
-const SERVER_ROOT = 'http://localhost:5000'; // for static files served outside /api, e.g. /page-images
+// Same origin when the backend serves the frontend (any deployed host, or localhost:5000);
+// only the local dev servers (live-server / http-server / file://) point at localhost:5000.
+// Override from the page with: window.DOCNEXUS_API = 'https://your-host/api/projects'
+const IS_LOCAL_DEV = !location.protocol.startsWith('http') ||
+  (['localhost', '127.0.0.1'].includes(location.hostname) && location.port !== '5000');
+const API_BASE = window.DOCNEXUS_API ||
+  (IS_LOCAL_DEV ? 'http://localhost:5000/api/projects' : `${location.origin}/api/projects`);
 
 const projectId = sessionStorage.getItem('docnexus_project_id');
 
@@ -136,6 +141,11 @@ async function loadResults() {
     if (data.project?.hasQuestionPapers) {
       checkExistingQPState();
     }
+
+    if (data.project?.studyMaterialStatus && data.project.studyMaterialStatus !== 'ready') {
+      showStudyMaterialGenerating();
+      pollStudyMaterialStatus();
+    }
   } catch (err) {
     console.error('[loadResults]', err);
     showGlobalError(`Couldn't load your results: ${err.message}`);
@@ -185,33 +195,124 @@ function switchTabById(name) {
 //  NOTES
 // ─────────────────────────────────────────────
 
-function renderNotes() {
+/**
+ * Converts raw LLM-generated text into clean readable HTML.
+ * Strips markdown syntax (**, *, #, -, bullet dashes) and renders
+ * content as flowing prose paragraphs — no rigid bullet-point form.
+ */
+function inlineMd(t) {
+  return escapeHtml(t)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*(?!\s)(.+?)\*(?!\*)/g, '$1<em>$2</em>');
+}
+
+// Renders the structured notes (overview, **Key Points**, bullets, numbered steps)
+// as real HTML. Everything is escaped first, so it is safe to inject.
+function formatNoteContent(text) {
+  if (!text) return '';
+  const isHead = (l) => /^\s*#{1,6}\s*\S/.test(l) || /^\s*\*\*[^*]{2,60}?:?\*\*:?\s*$/.test(l);
+  const GENERIC = /^\s*(?:#{1,6}\s*|\*\*)\s*(?:key points|remember|steps|types \/ comparison)\s*:?\s*(?:\*\*)?:?\s*$/i;
+  const all = String(text).replace(/\r/g, '').split('\n').filter((l) => !GENERIC.test(l)); // labels the app added, not in the source
+  // a sub-heading with nothing under it is just a label: leave it out
+  const lines = all.filter((l, i) => {
+    if (!isHead(l)) return true;
+    for (let j = i + 1; j < all.length; j++) { if (!all[j].trim()) continue; return !isHead(all[j]); }
+    return false;
+  });
+  let html = '', list = null, prevKind = '';
+  const close = () => { if (list) { html += `</${list}>`; list = null; } };
+  for (let raw of lines) {
+    const line = raw.trim();
+    if (!line) { close(); prevKind = ''; continue; }
+    let m;
+    if ((m = line.match(/^#{1,6}\s*(.+)$/)) || (m = line.match(/^\*\*([^*]{2,60}?):?\*\*:?$/))) {
+      close(); prevKind = 'head'; html += `<h4 class="note-sub">${inlineMd(m[1].replace(/:$/, ''))}</h4>`;
+    } else if ((m = line.match(/^[-•*]\s+(.+)$/))) {
+      const lvl = Math.min(2, Math.floor((raw.match(/^\s*/)[0].length) / 2));
+      if (list !== 'ul') { close(); html += '<ul class="note-list">'; list = 'ul'; }
+      html += `<li${lvl ? ` class="lvl${lvl}"` : ''}>${inlineMd(m[1])}</li>`;
+      prevKind = 'bullet';
+    } else if ((m = line.match(/^\d+[.)]\s+(.+)$/))) {
+      const nested = prevKind === 'bullet' || prevKind === 'numNested'; // 1,2,3 under a bullet belongs to it
+      if (list !== 'ol') { close(); html += '<ol class="note-list">'; list = 'ol'; }
+      html += `<li${nested ? ' style="margin-left:1.4rem"' : ''}>${inlineMd(m[1])}</li>`;
+      prevKind = nested ? 'numNested' : 'num';
+    } else {
+      close(); prevKind = 'para'; html += `<p>${inlineMd(line)}</p>`;
+    }
+  }
+  close();
+  return html;
+}
+
+// The Notes tab shows the notes directly as a PDF (the browser's own PDF viewer).
+// If the PDF can't be built, it falls back to the card layout.
+let notesPdfUrl = null;
+async function renderNotes() {
   const container = document.getElementById('notesSections');
-  if (NOTES.length === 0) {
+  if (!NOTES.length) return renderNotesHtml();
+  container.innerHTML = `<div class="text-center py-12 text-zinc-500 text-sm">Preparing PDF view…</div>`;
+  try {
+    const res = await fetch(`${API_BASE}/${projectId}/export/notes?inline=1`);
+    if (!res.ok) throw new Error('PDF unavailable');
+    const blob = await res.blob();
+    if (notesPdfUrl) URL.revokeObjectURL(notesPdfUrl);
+    notesPdfUrl = URL.createObjectURL(blob);
+    container.innerHTML = `
+      <iframe src="${notesPdfUrl}#view=FitH" title="Unified Notes PDF"
+        style="width:100%;height:82vh;min-height:560px;border:1px solid rgba(255,255,255,0.08);border-radius:14px;background:#fff;"></iframe>`;
+  } catch (err) {
+    console.warn('[renderNotes] PDF view failed, using card view:', err);
+    renderNotesHtml();
+  }
+}
+
+function renderNotesHtml() {
+  const container = document.getElementById('notesSections');
+  const hasBody = (n) => (n.diagrams || []).length || n.hasConflict ||
+    String(n.content || '').split('\n').filter((l) => !/^\s*#{1,6}\s/.test(l) && !/^\s*\*\*[^*]+\*\*:?\s*$/.test(l)).join(' ').replace(/[-•*]\s/g, ' ').trim().length >= 25;
+  const SHOWN = NOTES.filter(hasBody); // a title with nothing under it is not shown
+  if (SHOWN.length === 0) {
     container.innerHTML = `<div class="text-center py-12 text-zinc-500 text-sm">No notes yet.</div>`;
     return;
   }
-  container.innerHTML = NOTES.map(note => `
+
+  // Track which SVG strings have already been shown — same diagram must not appear in multiple notes
+  const shownSvgs = new Set();
+
+  container.innerHTML = SHOWN.map(note => {
+    // Filter to only diagrams not already shown in a previous note
+    const uniqueDiagrams = (note.diagrams || []).filter(d => (d.image || d.svg) && !shownSvgs.has(d.image || d.svg));
+    uniqueDiagrams.forEach(d => shownSvgs.add(d.image || d.svg));
+
+    const hasDiagrams = uniqueDiagrams.length > 0;
+    const diagramsHtml = hasDiagrams
+      ? `<div class="flex flex-col gap-4 mt-5 mb-2">
+          ${uniqueDiagrams.map(d => `
+            <div class="diagram-wrap rounded-xl border border-white/10 bg-white/[0.03] p-4 overflow-x-auto hover:border-[#7c6fff]/40 transition-colors">
+              <div class="diagram-svg-container" style="max-width:100%;">
+                ${diagramMarkup(d)}
+              </div>
+              ${d.description ? `<div class="text-[11px] text-zinc-600 mt-3 italic">${escapeHtml(d.description)}</div>` : ''}
+            </div>
+          `).join('')}
+        </div>`
+      : '';
+
+    return `
     <div class="bg-white/[0.02] border border-white/[0.05] rounded-2xl p-6 notes-content">
-      <div class="flex items-start justify-between gap-3 mb-3">
-        <h3 class="!mt-0 !mb-0">${escapeHtml(note.title)}</h3>
+      <div class="flex items-start justify-between gap-3 mb-4">
+        <h3 class="!mt-0 !mb-0">${escapeHtml(String(note.title).replace(/\s*\(cont\.\)\s*$/i, ""))}</h3>
         ${note.hasConflict ? `<span class="conflict-inline shrink-0 cursor-pointer" onclick="switchTabById('conflicts')">⚠️ Conflict</span>` : ''}
       </div>
-      <p>${escapeHtml(note.content)}</p>
-      ${(note.images && note.images.length > 0) ? `
-        <div class="flex flex-wrap gap-3 mt-4">
-          ${note.images.map(url => `
-            <img src="${SERVER_ROOT}${url}" alt="Diagram for ${escapeHtml(note.title)}"
-                 class="rounded-lg border border-white/10 max-h-64 object-contain cursor-pointer"
-                 onclick="window.open('${SERVER_ROOT}${url}', '_blank')" />
-          `).join('')}
-        </div>
-      ` : ''}
-      <div class="flex flex-wrap gap-1 mt-3">
+      <div class="notes-body">${formatNoteContent(note.content)}</div>
+      ${diagramsHtml}
+      <div class="flex flex-wrap gap-1 mt-4">
         ${(note.sources || []).map(s => `<span class="source-tag">${escapeHtml(s)}</span>`).join('')}
       </div>
     </div>
-  `).join('');
+  `;
+  }).join('');
 }
 
 // ─────────────────────────────────────────────
@@ -275,11 +376,6 @@ function renderConflicts() {
 
 // ─────────────────────────────────────────────
 //  EXPORT (browser print-to-PDF)
-//  Quick, dependency-free export: opens the browser's
-//  native print dialog scoped to just the relevant
-//  content, where the user can "Save as PDF". A real
-//  server-generated PDF (via pdfkit) can replace this
-//  later without changing these two call sites.
 // ─────────────────────────────────────────────
 
 function printSection(contentHtml, title) {
@@ -294,58 +390,143 @@ function printSection(contentHtml, title) {
     <head>
       <title>${escapeHtml(title)} — DocNexus</title>
       <style>
-        body { font-family: -apple-system, 'Segoe UI', sans-serif; color: #18181b; padding: 40px; max-width: 720px; margin: 0 auto; }
-        h1 { font-size: 22px; margin-bottom: 4px; }
-        .meta { color: #71717a; font-size: 12px; margin-bottom: 28px; }
-        h3 { font-size: 15px; margin: 20px 0 6px; }
-        p { font-size: 13px; line-height: 1.7; color: #3f3f46; margin: 0 0 8px; }
-        .tag { display: inline-block; font-size: 10px; padding: 2px 7px; border-radius: 4px; background: #f4f4f5; color: #52525b; margin-right: 4px; margin-top: 4px; }
-        ul { padding-left: 18px; margin: 6px 0 16px; }
-        li { font-size: 13px; line-height: 1.6; color: #3f3f46; margin-bottom: 4px; }
-        .unit { font-weight: 700; font-size: 14px; margin: 18px 0 6px; }
-        @media print { body { padding: 0; } }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        * { box-sizing: border-box; }
+        body { font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif; color: #18181b; padding: 48px 40px; max-width: 740px; margin: 0 auto; }
+        h1 { font-size: 24px; font-weight: 700; margin: 0 0 4px; color: #09090b; }
+        .meta { color: #71717a; font-size: 12px; margin-bottom: 36px; border-bottom: 1px solid #e4e4e7; padding-bottom: 16px; }
+        .note-block { margin-bottom: 32px; padding-bottom: 28px; border-bottom: 1px solid #f4f4f5; }
+        .note-block:last-child { border-bottom: none; }
+        h3 { font-size: 16px; font-weight: 600; margin: 0 0 10px; color: #09090b; }
+        p { font-size: 13.5px; line-height: 1.8; color: #3f3f46; margin: 0 0 10px; }
+        .tag { display: inline-block; font-size: 10px; padding: 2px 8px; border-radius: 4px; background: #f4f4f5; color: #52525b; margin-right: 4px; margin-top: 8px; font-weight: 500; }
+        h4.note-sub { font-size: 13px; font-weight: 700; margin: 14px 0 6px; color: #4338ca; text-transform: uppercase; letter-spacing: .04em; }
+        .diagram-wrap img { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+        ul, ol { padding-left: 20px; margin: 6px 0 14px; }
+        li { font-size: 13.5px; line-height: 1.7; color: #3f3f46; margin-bottom: 5px; }
+        .unit { font-weight: 700; font-size: 15px; margin: 20px 0 8px; color: #09090b; }
+        .diagram-wrap { margin: 14px 0; border: 1px solid #e4e4e7; border-radius: 8px; padding: 12px; }
+        .diagram-wrap svg { max-width: 100%; height: auto; display: block; }
+        .diagram-caption { font-size: 11px; color: #71717a; margin-top: 8px; font-style: italic; }
+        @media print {
+          body { padding: 20px; }
+          .note-block { page-break-inside: avoid; }
+          .diagram-wrap { page-break-inside: avoid; }
+        }
       </style>
     </head>
     <body>
       <h1>${escapeHtml(title)}</h1>
-      <div class="meta">Generated by DocNexus · ${new Date().toLocaleDateString()}</div>
+      <div class="meta">Generated by DocNexus &middot; ${new Date().toLocaleDateString()}</div>
       ${contentHtml}
     </body>
     </html>
   `);
   printWindow.document.close();
   printWindow.focus();
-  setTimeout(() => printWindow.print(), 300);
+  // Wait until every figure has loaded, otherwise the PDF shows empty boxes.
+  const waitAndPrint = () => {
+    const imgs = Array.from(printWindow.document.images);
+    Promise.all(imgs.map(im => im.complete ? Promise.resolve() : new Promise(r => { im.onload = im.onerror = r; })))
+      .then(() => setTimeout(() => printWindow.print(), 400));
+  };
+  if (printWindow.document.readyState === 'complete') waitAndPrint();
+  else printWindow.onload = waitAndPrint;
 }
 
-function exportNotesPDF() {
-  if (NOTES.length === 0) {
-    alert('No notes to export yet.');
-    return;
+// Downloads a ready-made PDF built by the backend (real file, figures included).
+async function downloadPdf(kind, btn) {
+  const label = btn ? btn.innerHTML : '';
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = 'Preparing PDF…'; }
+    const res = await fetch(`${API_BASE}/${projectId}/export/${kind}`);
+    if (!res.ok) {
+      let msg = 'Could not create the PDF.';
+      try { msg = (await res.json()).error || msg; } catch (_) {}
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = kind === 'notes' ? 'DocNexus-Unified-Notes.pdf' : 'DocNexus-Revision-Sheet.pdf';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch (err) {
+    alert(err.message || 'PDF export failed.');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = label; }
   }
-  const html = NOTES.map(note => `
-    <h3>${escapeHtml(note.title)}</h3>
-    <p>${escapeHtml(note.content)}</p>
-    <div>${(note.sources || []).map(s => `<span class="tag">${escapeHtml(s)}</span>`).join('')}</div>
-  `).join('');
-  printSection(html, 'Unified Notes');
 }
 
-function exportRevisionPDF() {
-  if (REVISION.length === 0) {
-    alert('No revision sheet to export yet.');
-    return;
-  }
-  const html = REVISION.map(section => `
-    <div class="unit">${escapeHtml(section.unit)}</div>
-    <ul>${(section.points || []).map(p => `<li>${escapeHtml(p)}</li>`).join('')}</ul>
-  `).join('');
-  printSection(html, 'Revision Sheet');
-}
+function exportNotesPDF(btn) { return downloadPdf('notes', btn); }
+function exportRevisionPDF(btn) { return downloadPdf('revision', btn); }
 
 // ─────────────────────────────────────────────
-//  SHARED HELPERS
+//  STUDY MATERIAL (flashcards/quiz/revision) — generated in the
+//  background AFTER notes are ready, so poll separately instead of
+//  blocking the Notes tab. Mirrors the qp.js polling pattern.
 // ─────────────────────────────────────────────
+
+let studyMaterialPollTimer = null;
+
+function showStudyMaterialGenerating() {
+  const generatingMsg = `<div class="text-center py-12 text-zinc-500 text-sm flex items-center justify-center gap-2">
+    <svg class="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+    Generating flashcards, quiz, and revision sheet — notes are ready above in the meantime.
+  </div>`;
+  ['quizQuestions', 'revisionContent'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = generatingMsg;
+  });
+  const cardQ = document.getElementById('cardQ');
+  const cardA = document.getElementById('cardA');
+  if (cardQ) cardQ.textContent = 'Generating...';
+  if (cardA) cardA.textContent = 'Flashcards are being created in the background.';
+}
+
+async function pollStudyMaterialStatus() {
+  if (studyMaterialPollTimer) clearTimeout(studyMaterialPollTimer);
+
+  try {
+    const res = await fetch(`${API_BASE}/${projectId}/study-material-status`);
+    const data = await res.json();
+
+    if (data.studyMaterialStatus === 'ready') {
+      FLASHCARDS = data.flashcards || [];
+      QUIZ = data.quiz || { mcq: [], short: [], long: [] };
+      REVISION = data.revision || [];
+      renderFlashcards();
+      renderQuiz('mcq');
+      renderRevision();
+      return; // stop polling
+    }
+
+    if (data.studyMaterialStatus === 'failed') {
+      ['quizQuestions', 'revisionContent'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = `<div class="text-center py-12 text-zinc-500 text-sm">Study material generation failed. Notes are unaffected — try refreshing later.</div>`;
+      });
+      return; // stop polling
+    }
+
+    // still 'processing' — check again shortly
+    studyMaterialPollTimer = setTimeout(pollStudyMaterialStatus, 3000);
+  } catch (err) {
+    console.error('[pollStudyMaterialStatus]', err);
+    studyMaterialPollTimer = setTimeout(pollStudyMaterialStatus, 5000);
+  }
+}
+
+// Renders one note figure: a real extracted image (preferred) or a legacy SVG.
+function diagramMarkup(d, eager) {
+  if (d.image) {
+    return `<img src="${d.image}" alt="${escapeHtml(d.description || 'Figure')}" ${eager ? '' : 'loading="lazy"'} style="max-width:100%;height:auto;display:block;margin:0 auto;border-radius:6px;">`;
+  }
+  return d.svg || '';
+}
 
 function escapeHtml(text) {
   if (text == null) return '';

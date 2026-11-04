@@ -8,6 +8,8 @@ frontend/node_modules/
 
 # ── Environment secrets ──
 .env
+.env.*
+*.bak
 backend/.env
 frontend/.env
 *.env.local

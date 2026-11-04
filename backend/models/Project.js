@@ -36,6 +36,16 @@ const projectSchema = new mongoose.Schema(
 
     hasQuestionPapers: { type: Boolean, default: false },
 
+    // Tracks flashcards/quiz/revision generation SEPARATELY from the main
+    // notes pipeline, so the Notes tab becomes available as soon as fusion
+    // finishes instead of waiting for study material too. Mirrors the same
+    // pattern as qpStatus below.
+    studyMaterialStatus: {
+      type: String,
+      enum: ['processing', 'ready', 'failed'],
+      default: 'processing',
+    },
+
     // Tracks the SEPARATE, optional flow where question papers are
     // uploaded later from results.html (not during initial upload).
     qpStatus: {
@@ -47,7 +57,13 @@ const projectSchema = new mongoose.Schema(
 
     // Cached exam-analysis result so results.html doesn't have to
     // re-run the LLM topic-frequency analysis on every page load.
-    examTopics: [{ topic: String, count: Number }],
+    examTopics: [{
+      _id: false,
+      topic: String,
+      count: Number,
+      papers: [{ _id: false, name: String, year: String, count: Number }], // which paper(s)/year(s) asked it
+      questions: [String], // a few of the actual questions
+    }],
 
     errorMessage: { type: String, default: null },
   },

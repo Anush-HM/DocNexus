@@ -3,8 +3,8 @@
 //  Run once after your first documents are processed:
 //    node scripts/createVectorIndex.js
 //
-//  Creates the two Atlas Vector Search indexes this
-//  project needs (on `chunks` and `qpchunks` collections).
+//  Creates the three Atlas Vector Search indexes this
+//  project needs (on `unifiednotes`, `chunks` and `qpchunks`).
 //  Requires an Atlas cluster on M10+ OR a free/shared
 //  cluster that supports Search (most do via Atlas Search).
 // ─────────────────────────────────────────────
@@ -45,6 +45,24 @@ async function main() {
       ],
     },
   };
+
+  const noteIndexDef = {
+    name: process.env.NOTE_VECTOR_INDEX_NAME || 'note_vector_index',
+    type: 'vectorSearch',
+    definition: {
+      fields: [
+        { type: 'vector', path: 'embedding', numDimensions: 1024, similarity: 'cosine' },
+        { type: 'filter', path: 'projectId' },
+      ],
+    },
+  };
+
+  try {
+    await db.collection('unifiednotes').createSearchIndex(noteIndexDef);
+    console.log(`Created vector index "${noteIndexDef.name}" on unifiednotes`);
+  } catch (err) {
+    console.error('Failed creating unifiednotes index:', err.message);
+  }
 
   try {
     await db.collection('chunks').createSearchIndex(chunkIndexDef);

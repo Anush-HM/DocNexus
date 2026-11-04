@@ -40,14 +40,21 @@ async function embedText(text) {
  * @param {string[]} texts
  * @returns {Promise<number[][]>}
  */
-async function embedBatch(texts, batchSize = 90) {
-  const results = [];
-  for (let i = 0; i < texts.length; i += batchSize) {
-    const batch = texts.slice(i, i + batchSize);
-    const vectors = await documentEmbeddings.embedDocuments(batch);
-    results.push(...vectors);
+async function embedBatch(texts, batchSize = 90, concurrency = 3) {
+  const batches = [];
+  for (let i = 0; i < texts.length; i += batchSize) batches.push(texts.slice(i, i + batchSize));
+
+  // several batches in flight at once instead of strictly one after another
+  const results = new Array(batches.length);
+  let next = 0;
+  async function worker() {
+    while (next < batches.length) {
+      const idx = next++;
+      results[idx] = await documentEmbeddings.embedDocuments(batches[idx]);
+    }
   }
-  return results;
+  await Promise.all(Array.from({ length: Math.min(concurrency, batches.length) }, worker));
+  return results.flat();
 }
 
 /**

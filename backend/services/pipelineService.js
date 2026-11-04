@@ -16,12 +16,12 @@ const StudyMaterial = require('../models/StudyMaterial');
 
 const { extractTextFromPDF } = require('./pdfService');
 const { chunkPages } = require('./chunkService');
+const { extractStructured } = require('./structuredPdf');
 const { embedBatch } = require('./embeddingService');
 const { runFusion } = require('./fusionEngine');
-const { renderPagesToImages, saveSelectedPages } = require('./pdfImageService');
-const { describePages } = require('./visionService');
-const { generateAllStudyMaterial } = require('./studyMaterialService');
-const { analyzeTopicFrequency } = require('./examAnalysisService');
+const { extractImagesFromPDF } = require('./pdfImageService');
+const { generateStudyMaterialFast } = require('./studyMaterialService');
+const { analyzeExam } = require('./examAnalysisService');
 
 async function setProgress(projectId, step, pct) {
   await Project.findByIdAndUpdate(projectId, { 'progress.step': step, 'progress.pct': pct });
@@ -65,15 +65,18 @@ async function processQuestionPapers(projectId, qpDocs) {
       );
     }
 
-    // Run exam topic-frequency analysis against ALL question papers the
-    // project has so far (not just the ones just uploaded), then cache it.
-    const allQpChunks = await QPChunk.find({ projectId }).limit(300);
-    const notes = await UnifiedNote.find({ projectId });
-    const knownTopics = notes.map((n) => n.title);
+    // Run exam topic-frequency analysis against ALL question papers the project
+    // has so far (not just the ones just uploaded), using each paper's full text
+    // split into individual questions, so overlapping chunks never double-count.
+    const allQpDocs = await SourceDocument.find({ projectId, type: 'question_paper' });
+    const notes = await UnifiedNote.find({ projectId }).select('+embedding title content').lean();
 
     let examTopics = [];
-    if (allQpChunks.length > 0 && knownTopics.length > 0) {
-      examTopics = await analyzeTopicFrequency(allQpChunks.map((c) => c.text), knownTopics);
+    if (allQpDocs.length > 0 && notes.length > 0) {
+      examTopics = await analyzeExam(
+        allQpDocs.map((d) => ({ name: d.fileName, text: d.rawText || '' })),
+        notes
+      );
     }
 
     await Project.findByIdAndUpdate(projectId, {
@@ -103,61 +106,89 @@ async function runPipeline(projectId) {
     await setProgress(projectId, 'extract', 10);
     const materialDocs = await SourceDocument.find({ projectId, type: 'material' });
 
-    const allChunkRecords = []; // { text, pageNumber, sourceFileName, sourceDocumentId }
+    // Documents are processed in parallel (a few at a time) instead of one after
+    // another; results are stitched back together in upload order so chunk and
+    // note order stay deterministic.
+    const DOC_CONCURRENCY = 3;
+    const perDoc = new Array(materialDocs.length);
+    let nextDoc = 0;
+    let docsDone = 0;
 
-    for (const doc of materialDocs) {
-      const { text, pages, pageCount } = await extractTextFromPDF(doc.filePath);
+    async function processDoc(doc) {
+      // Structure-aware read (real lines, headings, no page furniture); falls back to plain text.
+      let structured = null;
+      try { structured = await extractStructured(doc.filePath); }
+      catch (err) { console.error(`[Pipeline] Structured read failed for ${doc.fileName}, using plain text:`, err.message); }
+      const useStructured = !!(structured && structured.chunks.length);
+      const { text, pages, pageCount } = useStructured ? structured : await extractTextFromPDF(doc.filePath);
       doc.rawText = text;
       doc.pageCount = pageCount;
       doc.status = 'extracted';
       await doc.save();
 
-      // ── Diagram/chart extraction ──
-      // Render pages to images, ask the vision model which pages have
-      // a diagram, then save ONLY those pages to disk (keeps storage
-      // sane — most pages are just text and don't need an image saved).
-      let pageImageUrlMap = {}; // pageNumber -> url
+      // Real image/figure extraction (no AI calls). A failure here must never
+      // fail the whole upload.
+      const pageImageMap = {}; // pageNumber -> [{ image, pageNumber, kind, phash }]
       try {
-        const pageImages = await renderPagesToImages(doc.filePath, { maxPages: 30 });
-        const visualDescriptions = await describePages(pageImages);
-
-        if (visualDescriptions.length > 0) {
-          const savedImages = saveSelectedPages(
-            doc._id,
-            pageImages,
-            visualDescriptions.map((v) => v.pageNumber)
-          );
-          savedImages.forEach(({ pageNumber, url }) => {
-            pageImageUrlMap[pageNumber] = url;
-          });
-
-          // Fold the text description into that page's text too, so the
-          // fusion LLM has words to work with even where the note text
-          // needs to reference what the diagram shows.
-          visualDescriptions.forEach(({ pageNumber, description }) => {
-            const idx = pageNumber - 1;
-            if (pages[idx] !== undefined) {
-              pages[idx] += `\n\n[Diagram/Chart on this page]: ${description}`;
-            }
-          });
-        }
+        const figures = await extractImagesFromPDF(doc.filePath, { pageTexts: pages });
+        figures.forEach((f) => {
+          (pageImageMap[f.pageNumber] = pageImageMap[f.pageNumber] || []).push(f);
+        });
       } catch (err) {
-        // Image extraction is a bonus feature — never let it fail the
-        // whole upload if Cohere vision or pdf rendering has an issue.
         console.error(`[Pipeline] Image extraction failed for ${doc.fileName}:`, err.message);
       }
 
-      const chunked = await chunkPages(pages.length ? pages : [text]);
-      chunked.forEach((c) => {
-        allChunkRecords.push({
-          text: c.text,
-          pageNumber: c.pageNumber,
-          sourceFileName: doc.fileName,
-          sourceDocumentId: doc._id,
-          imageUrl: pageImageUrlMap[c.pageNumber] || null,
+      const chunked = useStructured ? structured.chunks : await chunkPages(pages.length ? pages : [text]);
+      const spanOf = (c) => c.pageNumbers || [c.pageNumber];
+      const pagesWithChunks = new Set(chunked.flatMap(spanOf));
+
+      // Every text chunk on a page carries that page's figures; the fusion engine
+      // later assigns each figure to the ONE topic that holds most of the page.
+      const chunkRecords = chunked.map((c) => ({
+        text: c.text,
+        pageNumber: c.pageNumber,
+        sourceFileName: doc.fileName,
+        sourceDocumentId: doc._id,
+        images: [...new Set(spanOf(c).flatMap((pn) => pageImageMap[pn] || []))],
+      }));
+
+      // Pages that are only a picture (scanned / handwritten / diagram-only slide)
+      // have no text to fuse. Keep them as their own figure notes, exactly as they
+      // appear, instead of embedding a meaningless placeholder sentence.
+      const figureNotes = [];
+      Object.keys(pageImageMap)
+        .map(Number)
+        .filter((pn) => !pagesWithChunks.has(pn))
+        .sort((x, y) => x - y)
+        .forEach((pn) => {
+          figureNotes.push({
+            title: `${doc.fileName.replace(/\.pdf$/i, '')} — page ${pn}`,
+            content: `Page ${pn} of ${doc.fileName} contains only an image (scanned or handwritten notes, or a diagram), shown below as it appears in the original.`,
+            sources: [doc.fileName],
+            sourceRefs: [`${doc.fileName} p.${pn}`],
+            diagrams: pageImageMap[pn].map((f) => ({
+              image: f.image,
+              description: `Figure from ${doc.fileName}, page ${pn}`,
+            })),
+            hasConflict: false,
+          });
         });
-      });
+
+      return { chunkRecords, figureNotes };
     }
+
+    async function docWorker() {
+      while (nextDoc < materialDocs.length) {
+        const idx = nextDoc++;
+        perDoc[idx] = await processDoc(materialDocs[idx]);
+        docsDone++;
+        await setProgress(projectId, 'extract', 10 + Math.round((docsDone / materialDocs.length) * 20)).catch(() => {});
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(DOC_CONCURRENCY, materialDocs.length) }, docWorker));
+
+    const allChunkRecords = perDoc.flatMap((d) => d.chunkRecords);
+    const figureNotes = perDoc.flatMap((d) => d.figureNotes);
 
     // Chunking has no user-facing meaning of its own, so we fold it into
     // the same "understand" stage as embeddings rather than giving it a
@@ -176,34 +207,53 @@ async function runPipeline(projectId) {
         pageNumber: c.pageNumber,
         text: c.text,
         embedding: embeddings[i],
-        imageUrl: c.imageUrl,
       }))
     );
 
     // ── Phase 5: Knowledge Fusion Engine ──
     await setProgress(projectId, 'match', 65);
-    const { notes, conflicts, duplicatesRemoved, sourcesUsed } = await runFusion(
-      chunkDocs.map((c) => ({
+    const { notes: fusedNotes, conflicts, duplicatesRemoved, sourcesUsed } = await runFusion(
+      chunkDocs.map((c, i) => ({
         _id: c._id,
         text: c.text,
-        embedding: c.embedding,
+        embedding: embeddings[i], // plain arrays: skip mongoose overhead
         sourceFileName: c.sourceFileName,
         pageNumber: c.pageNumber,
-        imageUrl: c.imageUrl,
-      }))
+        images: allChunkRecords[i].images, // insertMany keeps input order
+      })),
+      {
+        onProgress: (done, total) =>
+          setProgress(projectId, 'match', 65 + Math.round((done / total) * 10)).catch(() => {}),
+      }
     );
     await setProgress(projectId, 'conflict', 75);
 
     // ── Phase 6 & 8: Save Unified Notes + Conflicts ──
+    // fused topics first, then pages that are pure images
+    const notes = [...fusedNotes, ...figureNotes];
+
+    // Flashcards / quiz / revision sheet are built NOW, in parallel with embedding
+    // and saving the notes, so they're ready the moment the notes are.
+    const studyPromise = generateStudyMaterialFast(notes);
+
+    // The model sometimes leaves a side of a conflict blank; the schema requires
+    // text there, so fill gaps instead of failing the whole project.
+    const txt = (v, d) => (typeof v === 'string' && v.trim() ? v : d);
     const savedConflicts = await Conflict.insertMany(
-      conflicts.map((c) => ({ projectId, ...c }))
+      conflicts.map((c) => ({
+        projectId,
+        topic: txt(c.topic, 'Untitled topic'),
+        sourceA: { name: txt(c.sourceA?.name, 'Source A'), claim: txt(c.sourceA?.claim, 'Not specified') },
+        sourceB: { name: txt(c.sourceB?.name, 'Source B'), claim: txt(c.sourceB?.claim, 'Not specified') },
+        recommended: txt(c.recommended, ''),
+      }))
     );
 
-    // Map conflict topic -> conflict _id so notes can link to them
-    const conflictByTopic = {};
-    savedConflicts.forEach((c) => {
-      conflictByTopic[c.topic] = c._id;
-    });
+    // Embed each note so the chatbot can search the FUSED knowledge base.
+    // Capped length keeps us inside the embedding model's input limit.
+    const noteEmbeddings = await embedBatch(
+      notes.map((n) => `${n.title}\n${n.content}`.slice(0, 1800))
+    );
 
     const savedNotes = await UnifiedNote.insertMany(
       notes.map((n, idx) => ({
@@ -211,14 +261,19 @@ async function runPipeline(projectId) {
         title: n.title,
         content: n.content,
         sources: n.sources,
-        images: n.images || [],
+        sourceRefs: n.sourceRefs || [],
+        embedding: noteEmbeddings[idx],
+        diagrams: n.diagrams || [],
         hasConflict: n.hasConflict,
-        conflictId: n.hasConflict ? conflictByTopic[n.title] || null : null,
+        // linked by position in the conflicts list, so duplicate titles can't collide
+        conflictId: n.hasConflict && n.conflictIndex != null ? savedConflicts[n.conflictIndex]?._id || null : null,
         order: idx,
       }))
     );
 
     await setProgress(projectId, 'fuse', 85);
+    const studyMaterial = await studyPromise;
+    await StudyMaterial.findOneAndUpdate({ projectId }, { projectId, ...studyMaterial }, { upsert: true, new: true });
 
     // ── Phase 7: Question Papers (optional) ──
     const qpDocs = await SourceDocument.find({ projectId, type: 'question_paper' });
@@ -226,17 +281,13 @@ async function runPipeline(projectId) {
       await processQuestionPapers(projectId, qpDocs);
     }
 
-    // ── Generate flashcards / quiz / revision / interview prep ──
-    await setProgress(projectId, 'studymaterial', 92);
-    const studyMaterial = await generateAllStudyMaterial(savedNotes);
-    await StudyMaterial.create({ projectId, ...studyMaterial });
-
-    // ── Done ──
+    // ── Done (main notes) — mark ready NOW, don't wait on study material ──
     await Project.findByIdAndUpdate(projectId, {
       status: 'ready',
       'progress.step': 'done',
       'progress.pct': 100,
       hasQuestionPapers: qpDocs.length > 0,
+      studyMaterialStatus: 'ready',
       stats: {
         topicsMerged: savedNotes.length,
         duplicatesRemoved,

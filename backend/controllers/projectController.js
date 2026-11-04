@@ -6,6 +6,7 @@ const SourceDocument = require('../models/SourceDocument');
 const UnifiedNote = require('../models/UnifiedNote');
 const Conflict = require('../models/Conflict');
 const StudyMaterial = require('../models/StudyMaterial');
+const { buildNotesPdf, buildRevisionPdf } = require('../services/pdfExportService');
 const { runPipeline, processQuestionPapers } = require('../services/pipelineService');
 
 /**
@@ -101,6 +102,7 @@ async function getResults(req, res) {
         id: project._id,
         stats: project.stats,
         hasQuestionPapers: project.hasQuestionPapers,
+        studyMaterialStatus: project.studyMaterialStatus,
         createdAt: project.createdAt,
       },
       notes,
@@ -108,11 +110,36 @@ async function getResults(req, res) {
       flashcards: studyMaterial?.flashcards || [],
       quiz: studyMaterial?.quiz || { mcq: [], short: [], long: [] },
       revision: studyMaterial?.revision || [],
-      interviewPrep: studyMaterial?.interviewPrep || [],
     });
   } catch (err) {
     console.error('[getResults]', err);
     res.status(500).json({ error: 'Failed to fetch results' });
+  }
+}
+
+/**
+ * GET /api/projects/:id/study-material-status
+ * Polled by results.html while flashcards/quiz/revision are still
+ * generating in the background, after notes are already visible.
+ */
+async function getStudyMaterialStatus(req, res) {
+  try {
+    const project = await Project.findById(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    if (project.studyMaterialStatus !== 'ready') {
+      return res.json({ studyMaterialStatus: project.studyMaterialStatus });
+    }
+
+    const studyMaterial = await StudyMaterial.findOne({ projectId: project._id });
+    res.json({
+      studyMaterialStatus: 'ready',
+      flashcards: studyMaterial?.flashcards || [],
+      quiz: studyMaterial?.quiz || { mcq: [], short: [], long: [] },
+      revision: studyMaterial?.revision || [],
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch study material status' });
   }
 }
 
@@ -180,4 +207,34 @@ async function getQPStatus(req, res) {
   }
 }
 
-module.exports = { uploadProject, getStatus, getResults, uploadQuestionPapers, getQPStatus };
+/**
+ * GET /api/projects/:id/export/:kind   (kind = notes | revision)
+ * Streams a ready-made PDF download.
+ */
+async function exportPdf(req, res) {
+  try {
+    const project = await Project.findById(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const kind = req.params.kind === 'revision' ? 'revision' : 'notes';
+    let doc;
+    if (kind === 'notes') {
+      const notes = await UnifiedNote.find({ projectId: project._id }).sort('order').lean();
+      if (!notes.length) return res.status(404).json({ error: 'No notes to export yet.' });
+      doc = buildNotesPdf(notes);
+    } else {
+      const sm = await StudyMaterial.findOne({ projectId: project._id }).lean();
+      if (!sm?.revision?.length) return res.status(404).json({ error: 'No revision sheet to export yet.' });
+      doc = buildRevisionPdf(sm.revision);
+    }
+    res.setHeader('Content-Type', 'application/pdf');
+    const disp = req.query.inline ? 'inline' : 'attachment';
+    res.setHeader('Content-Disposition', `${disp}; filename="DocNexus-${kind === 'notes' ? 'Unified-Notes' : 'Revision-Sheet'}.pdf"`);
+    doc.pipe(res);
+    doc.end();
+  } catch (err) {
+    console.error('[exportPdf]', err);
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to build PDF' });
+  }
+}
+
+module.exports = { uploadProject, getStatus, getResults, uploadQuestionPapers, getQPStatus, getStudyMaterialStatus, exportPdf };

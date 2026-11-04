@@ -1,8 +1,7 @@
 // backend/services/studyMaterialService.js
 // ─────────────────────────────────────────────
-//  Generates flashcards, quizzes, revision sheets,
-//  and interview-prep questions from the fused
-//  Unified Notes of a project.
+//  Generates flashcards, quizzes and revision sheets
+//  from the fused Unified Notes of a project.
 // ─────────────────────────────────────────────
 
 const { getChatModel } = require('./llmService');
@@ -18,9 +17,18 @@ async function callJSON(prompt) {
   return JSON.parse(stripCodeFences(raw));
 }
 
+// Keep the prompt small (fast + inside the model's limits): an even spread of
+// up to 30 text topics, each trimmed. Figure-only pages are skipped.
+function pickNotes(notes, max = 30) {
+  const text = notes.filter((n) => !/contains only an image/i.test(n.content || ''));
+  if (text.length <= max) return text;
+  const step = text.length / max;
+  return Array.from({ length: max }, (_, i) => text[Math.floor(i * step)]);
+}
+
 function buildNotesContext(notes) {
-  return notes
-    .map((n) => `### ${n.title}\n${n.content}`)
+  return pickNotes(notes)
+    .map((n) => `### ${n.title}\n${String(n.content).replace(/^#+ /gm, '').slice(0, 450)}`)
     .join('\n\n');
 }
 
@@ -86,46 +94,24 @@ ${context}`;
 }
 
 /**
- * Generate interview / viva preparation questions.
- */
-async function generateInterviewPrep(notes, count = 10) {
-  const context = buildNotesContext(notes);
-  const prompt = `From the study notes below, generate exactly ${count} interview/viva preparation questions a student might be asked about these topics, each with a model answer (2-4 sentences). Mark each as one of: "technical", "viva", "interview".
-
-Respond ONLY with strict JSON, no markdown fences:
-{ "interviewPrep": [ { "q": "string", "a": "string", "category": "technical|viva|interview" }, ... ] }
-
-NOTES:
-${context}`;
-  const parsed = await callJSON(prompt);
-  return parsed.interviewPrep || [];
-}
-
-/**
- * Generate flashcards, quiz, revision sheet, and interview prep all in
- * ONE LLM call instead of 4 separate ones. This is the main entry point
- * used right after fusion completes.
- *
- * Uses reduced counts vs. the individual generators to stay within the
- * model's output token limit when all four are combined in one response.
- * Falls back to two separate calls (flashcards+quiz, then revision+interview)
- * if the combined response is still too long (e.g. very large note sets).
+ * Generate flashcards, quiz and revision sheet in ONE LLM call instead of 3
+ * separate ones. This is the main entry point used right after fusion completes.
+ * Falls back to two smaller calls (flashcards+quiz, then revision) if the
+ * combined response is too long to parse (e.g. very large note sets).
  */
 async function generateAllStudyMaterial(
   notes,
-  { flashcardCount = 8, mcqCount = 4, shortCount = 3, longCount = 2, interviewCount = 6 } = {}
+  { flashcardCount = 8, mcqCount = 4, shortCount = 3, longCount = 2 } = {}
 ) {
   const context = buildNotesContext(notes);
 
-  const prompt = `From the study notes below, generate ALL FOUR of the following study materials in one response:
+  const prompt = `From the study notes below, generate ALL THREE of the following study materials in one response:
 
 1. FLASHCARDS: exactly ${flashcardCount} flashcards for active recall. Each has a clear question and a concise answer (1-2 sentences). Cover a good spread of topics.
 
 2. QUIZ: ${mcqCount} multiple-choice questions (exactly 4 options each, one correct, 0-indexed answer), ${shortCount} short-answer questions (no options), and ${longCount} long-answer questions (no options).
 
 3. REVISION SHEET: group related topics into logical units and produce 3-4 short bullet points per unit covering the most exam-important facts.
-
-4. INTERVIEW PREP: exactly ${interviewCount} interview/viva questions with model answers (2-3 sentences each). Mark each as "technical", "viva", or "interview".
 
 Respond ONLY with strict JSON in this exact shape, no markdown fences, no extra text:
 {
@@ -135,8 +121,7 @@ Respond ONLY with strict JSON in this exact shape, no markdown fences, no extra 
     "short": [ { "q": "string" }, ... ],
     "long": [ { "q": "string" }, ... ]
   },
-  "revision": [ { "unit": "string", "points": ["string", ...] }, ... ],
-  "interviewPrep": [ { "q": "string", "a": "string", "category": "technical|viva|interview" }, ... ]
+  "revision": [ { "unit": "string", "points": ["string", ...] }, ... ]
 }
 
 NOTES:
@@ -148,13 +133,11 @@ ${context}`;
       flashcards: parsed.flashcards || [],
       quiz: parsed.quiz || { mcq: [], short: [], long: [] },
       revision: parsed.revision || [],
-      interviewPrep: parsed.interviewPrep || [],
     };
   } catch (err) {
     // Combined response was likely truncated (too long for the model's output
     // token limit). Fall back to two smaller calls: flashcards+quiz first,
-    // then revision+interview prep. This costs 2 API calls instead of 1 but
-    // still far fewer than the original 4 separate calls.
+    // then the revision sheet.
     console.warn('[studyMaterialService] Combined call failed, trying two-call fallback:', err.message);
     try {
       const [part1, part2] = await Promise.allSettled([
@@ -167,25 +150,23 @@ Respond ONLY with strict JSON, no markdown:
 { "flashcards": [{"q":"","a":""}], "quiz": {"mcq":[{"q":"","options":["","","",""],"answer":0}],"short":[{"q":""}],"long":[{"q":""}]} }
 
 NOTES:\n${context}`),
-        callJSON(`From the study notes below, generate a revision sheet and interview prep questions.
+        callJSON(`From the study notes below, generate a revision sheet.
 
 REVISION: group topics into units with 3-4 bullet points each covering exam-important facts.
-INTERVIEW PREP: exactly ${interviewCount} questions with 2-3 sentence answers. Mark each as "technical", "viva", or "interview".
 
 Respond ONLY with strict JSON, no markdown:
-{ "revision": [{"unit":"","points":[""]}], "interviewPrep": [{"q":"","a":"","category":"technical"}] }
+{ "revision": [{"unit":"","points":[""]}] }
 
 NOTES:\n${context}`),
       ]);
 
       const flashcardsAndQuiz = part1.status === 'fulfilled' ? part1.value : {};
-      const revisionAndInterview = part2.status === 'fulfilled' ? part2.value : {};
+      const revisionOnly = part2.status === 'fulfilled' ? part2.value : {};
 
       return {
         flashcards: flashcardsAndQuiz.flashcards || [],
         quiz: flashcardsAndQuiz.quiz || { mcq: [], short: [], long: [] },
-        revision: revisionAndInterview.revision || [],
-        interviewPrep: revisionAndInterview.interviewPrep || [],
+        revision: revisionOnly.revision || [],
       };
     } catch (fallbackErr) {
       console.error('[studyMaterialService] Fallback also failed, returning empty study material:', fallbackErr.message);
@@ -193,16 +174,68 @@ NOTES:\n${context}`),
         flashcards: [],
         quiz: { mcq: [], short: [], long: [] },
         revision: [],
-        interviewPrep: [],
       };
     }
   }
 }
 
+// ── No-AI fallback so the tabs are never empty ──
+const plain = (t) => String(t || '').replace(/^#+\s*/gm, '').replace(/^\s*(?:[-•]|\d+[.)])\s+/gm, '').replace(/\s+/g, ' ').trim();
+const sentences = (t) => (plain(t).match(/[^.!?]+[.!?]+(?=\s|$)/g) || [plain(t)]).map((x) => x.trim()).filter((x) => x.length > 20);
+const clip = (t, n) => (t.length > n ? t.slice(0, t.lastIndexOf(' ', n)) + '…' : t);
+
+function buildLocalStudyMaterial(notes) {
+  const pool = pickNotes(notes, 40).filter((n) => sentences(n.content).length);
+  const pick = (n) => (pool.length <= n ? pool : Array.from({ length: n }, (_, i) => pool[Math.floor((i * pool.length) / n)]));
+
+  const flashcards = pick(12).map((n) => ({ q: `Explain: ${n.title}`, a: clip(sentences(n.content).slice(0, 2).join(' '), 260) }));
+
+  const mcqNotes = pick(5);
+  const mcq = mcqNotes.map((n, i) => {
+    const right = clip(sentences(n.content)[0], 160);
+    const wrong = pool.filter((x) => x !== n).filter((_, j) => j % Math.max(1, Math.floor(pool.length / 3)) === i % 3).slice(0, 3).map((x) => clip(sentences(x.content)[0], 160));
+    while (wrong.length < 3) wrong.push('None of the above');
+    const answer = i % 4;
+    const options = [...wrong]; options.splice(answer, 0, right);
+    return { q: `Which statement correctly describes "${n.title}"?`, options: options.slice(0, 4), answer };
+  });
+  const short = pick(4).map((n) => ({ q: `Briefly explain ${n.title}.` }));
+  const long = pick(3).map((n) => ({ q: `Discuss ${n.title} in detail, with examples where relevant.` }));
+
+  const revision = pick(10).map((n) => ({ unit: n.title, points: sentences(n.content).slice(0, 3).map((x) => clip(x, 180)) }));
+  return { flashcards, quiz: { mcq, short, long }, revision };
+}
+
+/**
+ * Used by the pipeline: runs alongside embedding/saving, bounded by a timeout,
+ * and always returns something usable (AI result, else built locally).
+ */
+async function generateStudyMaterialFast(notes, timeoutMs = 60000) {
+  const local = () => buildLocalStudyMaterial(notes);
+  try {
+    const ai = await Promise.race([
+      generateAllStudyMaterial(notes),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timed out')), timeoutMs)),
+    ]);
+    const ok = ai && ai.flashcards.length && ai.quiz.mcq.length && ai.revision.length;
+    if (ok) return ai;
+    const l = local();
+    return {
+      flashcards: ai?.flashcards?.length ? ai.flashcards : l.flashcards,
+      quiz: ai?.quiz?.mcq?.length ? ai.quiz : l.quiz,
+      revision: ai?.revision?.length ? ai.revision : l.revision,
+    };
+  } catch (err) {
+    console.warn('[studyMaterial] AI generation unavailable, built locally:', err.message);
+    return local();
+  }
+}
+
 module.exports = {
+  generateStudyMaterialFast,
+  buildLocalStudyMaterial,
   generateFlashcards,
   generateQuiz,
   generateRevisionSheet,
-  generateInterviewPrep,
   generateAllStudyMaterial,
 };

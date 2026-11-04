@@ -1,7 +1,7 @@
 // backend/models/StudyMaterial.js
 // ─────────────────────────────────────────────
 //  Caches AI-generated flashcards / quiz / revision
-//  sheet / interview prep so we don't regenerate on
+//  sheet so we don't regenerate on
 //  every page load. One document per project.
 // ─────────────────────────────────────────────
 
@@ -27,11 +27,6 @@ const revisionSectionSchema = new mongoose.Schema(
   { _id: false }
 );
 
-const interviewQSchema = new mongoose.Schema(
-  { q: String, a: String, category: { type: String, enum: ['technical', 'viva', 'interview'] } },
-  { _id: false }
-);
-
 const studyMaterialSchema = new mongoose.Schema(
   {
     projectId: { type: mongoose.Schema.Types.ObjectId, ref: 'Project', required: true, unique: true, index: true },
@@ -45,8 +40,6 @@ const studyMaterialSchema = new mongoose.Schema(
     },
 
     revision: [revisionSectionSchema],
-
-    interviewPrep: [interviewQSchema],
   },
   { timestamps: true }
 );

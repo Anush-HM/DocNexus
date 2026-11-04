@@ -1,12 +1,108 @@
 // backend/services/ragService.js
 // ─────────────────────────────────────────────
 //  RAG Chatbot pipeline:
-//  User Question → Retriever → Relevant Chunks
-//    → Prompt Construction → OpenAI Chat API → Answer
+//  User Question → Retriever → Relevant FUSED notes
+//    → Prompt Construction → Chat model → Answer
+//
+//  The retriever searches the unified (deduplicated)
+//  notes. If a project has no embedded notes yet (older
+//  projects, or the note index isn't built), it falls
+//  back to the raw source chunks so the chatbot still works.
 // ─────────────────────────────────────────────
 
 const { getChatModel } = require('./llmService');
-const { retrieveRelevantChunks, retrieveRelevantQPChunks } = require('./vectorSearchService');
+const mongoose = require('mongoose');
+const UnifiedNote = require('../models/UnifiedNote');
+const Project = require('../models/Project');
+
+const EXAM_RE = /\b(exam|asked|ask|frequent|frequently|often|repeat|repeated|previous year|last year|past year|pyq|question paper|important|likely|expect|probable|most asked)\b/i;
+
+// Real numbers from the uploaded question papers: how often / in which year each topic was asked
+async function examStatsContext(projectId, question) {
+  try {
+    const proj = await Project.findById(projectId).select('examTopics hasQuestionPapers').lean();
+    const topics = (proj && proj.examTopics) || [];
+    if (!topics.length) return { text: '', has: !!(proj && proj.hasQuestionPapers) };
+    const qw = new Set((question.toLowerCase().match(/[a-z0-9]{4,}/g) || []));
+    const fmtT = (t) => `- ${t.topic}: asked ${t.count} time(s)` + ((t.papers || []).length ? ` across ${t.papers.length} paper(s) (${t.papers.map((p) => `${p.year || p.name}${p.count > 1 ? ` x${p.count}` : ''}`).join(', ')})` : '') + ((t.questions || []).length ? `\n    e.g. ${t.questions.slice(0, 2).join(' | ')}` : '');
+    const related = topics.filter((t) => (t.topic.toLowerCase().match(/[a-z0-9]{4,}/g) || []).some((w) => qw.has(w)));
+    const top = topics.slice(0, 15);
+    return { has: true, text: `MOST-ASKED TOPICS (counted from the uploaded previous-year papers):\n${top.map(fmtT).join('\n')}${related.length ? `\n\nTOPICS MATCHING THIS QUESTION:\n${related.slice(0, 5).map(fmtT).join('\n')}` : ''}` };
+  } catch (e) {
+    return { text: '', has: false };
+  }
+}
+const {
+  retrieveRelevantNotes,
+  retrieveRelevantChunks,
+  retrieveRelevantQPChunks,
+} = require('./vectorSearchService');
+
+const ORD = { first: 1, '1st': 1, second: 2, '2nd': 2, third: 3, '3rd': 3, fourth: 4, '4th': 4, fifth: 5, '5th': 5, sixth: 6, '6th': 6, seventh: 7, '7th': 7, eighth: 8, '8th': 8, ninth: 9, '9th': 9, tenth: 10, '10th': 10 };
+
+// "summarize the 1st topic", "explain topic 3", "last topic" -> position in the notes
+function positionalRef(q) {
+  const s = q.toLowerCase();
+  let m = s.match(/\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|\d+(?:st|nd|rd|th))\s+(?:topic|section|note|chapter)/);
+  if (m) return ORD[m[1]] || parseInt(m[1], 10);
+  m = s.match(/\b(?:topic|section|note)\s*(?:no\.?|number|#)?\s*(\d{1,3})\b/);
+  if (m) return parseInt(m[1], 10);
+  if (/\b(last|final)\s+(topic|section|note)/.test(s)) return -1;
+  return null;
+}
+
+async function loadAllNotes(projectId) {
+  return UnifiedNote.find({ projectId: new mongoose.Types.ObjectId(projectId) }).sort('order').select('title content sources sourceRefs order').lean();
+}
+
+const srcOf = (n) => (n.sourceRefs && n.sourceRefs.length ? n.sourceRefs : n.sources || []);
+const fmt = (n) => `[Topic: ${n.title} | from ${srcOf(n).join(', ')}]\n${n.content}`;
+
+async function retrieveKnowledge(projectId, question) {
+  try {
+    const all = await loadAllNotes(projectId);
+    const q = question.toLowerCase();
+
+    // 1) positional questions
+    const pos = positionalRef(question);
+    if (pos && all.length) {
+      const n = pos === -1 ? all[all.length - 1] : all[pos - 1];
+      if (n) return { context: fmt(n), sources: srcOf(n), found: true };
+    }
+    // 2) overview questions (list / how many / what is covered)
+    if (all.length && /(list|all|what|which).{0,25}topics|how many topics|table of contents|outline|what.{0,20}covered/.test(q)) {
+      return {
+        context: `[Outline of the notes: ${all.length} topics]\n` + all.map((n, i) => `${i + 1}. ${n.title}`).join('\n'),
+        sources: [...new Set(all.flatMap(srcOf))].slice(0, 6),
+        found: true,
+      };
+    }
+  } catch (err) {
+    console.warn('[ragService] Positional lookup failed:', err.message);
+  }
+
+  try {
+    const notes = await retrieveRelevantNotes(projectId, question, 6);
+    if (notes.length > 0) {
+      return {
+        context: notes.map(fmt).join('\n\n'),
+        sources: notes.flatMap(srcOf),
+        found: true,
+      };
+    }
+  } catch (err) {
+    console.warn('[ragService] Note search unavailable, using raw chunks:', err.message);
+  }
+
+  const chunks = await retrieveRelevantChunks(projectId, question, 5);
+  return {
+    context: chunks
+      .map((c) => `[${c.sourceFileName}${c.pageNumber ? ` p.${c.pageNumber}` : ''}]\n${c.text}`)
+      .join('\n\n'),
+    sources: chunks.map((c) => `${c.sourceFileName}${c.pageNumber ? ` p.${c.pageNumber}` : ''}`),
+    found: chunks.length > 0,
+  };
+}
 
 /**
  * Answer a user's question using only the project's fused knowledge base.
@@ -15,19 +111,18 @@ const { retrieveRelevantChunks, retrieveRelevantQPChunks } = require('./vectorSe
  * @param {boolean} includeQP - also search question-paper chunks (exam-focused questions)
  */
 async function answerQuestion(projectId, question, includeQP = false) {
-  const chunks = await retrieveRelevantChunks(projectId, question, 5);
+  const examIntent = EXAM_RE.test(question);
+  includeQP = includeQP || examIntent;
+  const exam = examIntent ? await examStatsContext(projectId, question) : { text: '', has: false };
+  const knowledge = await retrieveKnowledge(projectId, question);
   const qpChunks = includeQP ? await retrieveRelevantQPChunks(projectId, question, 3) : [];
 
-  if (chunks.length === 0 && qpChunks.length === 0) {
+  if (!knowledge.found && qpChunks.length === 0) {
     return {
       answer: "I couldn't find anything relevant to that in your fused knowledge base yet. Try rephrasing, or check that your documents finished processing.",
       sources: [],
     };
   }
-
-  const contextBlocks = chunks
-    .map((c) => `[${c.sourceFileName}${c.pageNumber ? ` p.${c.pageNumber}` : ''}]\n${c.text}`)
-    .join('\n\n');
 
   const qpContextBlocks = qpChunks
     .map((c) => `[Question Paper: ${c.sourceFileName}]\n${c.text}`)
@@ -38,9 +133,10 @@ async function answerQuestion(projectId, question, includeQP = false) {
 Keep answers clear and exam-relevant. Use short paragraphs or bullet points where helpful.
 
 KNOWLEDGE BASE CONTEXT:
-${contextBlocks || '(no relevant notes found)'}
+${knowledge.context || '(no relevant notes found)'}
 
-${includeQP ? `PREVIOUS-YEAR QUESTION PAPER CONTEXT:\n${qpContextBlocks || '(no relevant question paper excerpts found)'}\n` : ''}
+${exam.text ? `${exam.text}\n\n` : ''}${includeQP ? `PREVIOUS-YEAR QUESTION PAPER CONTEXT:\n${qpContextBlocks || '(no relevant question paper excerpts found)'}\n` : ''}${examIntent && !exam.text && !qpChunks.length ? 'NOTE: no question papers have been uploaded/analysed for this project, so say you cannot tell what was asked before and suggest uploading previous-year papers.\n' : ''}
+For questions about what was asked before or how often: answer from the MOST-ASKED TOPICS counts, years and example questions above (name the year/paper), and relate it to the notes. Never invent years or counts.
 
 QUESTION: ${question}
 
@@ -51,9 +147,10 @@ Answer:`;
   const answer = typeof response.content === 'string' ? response.content : String(response.content);
 
   const sources = [
-    ...new Set(
-      chunks.map((c) => `${c.sourceFileName}${c.pageNumber ? ` p.${c.pageNumber}` : ''}`)
-    ),
+    ...new Set([
+      ...knowledge.sources,
+      ...qpChunks.map((c) => `Question Paper: ${c.sourceFileName}`),
+    ]),
   ];
 
   return { answer, sources };

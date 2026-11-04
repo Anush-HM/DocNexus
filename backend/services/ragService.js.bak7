@@ -1,0 +1,94 @@
+// backend/services/ragService.js
+// ─────────────────────────────────────────────
+//  RAG Chatbot pipeline:
+//  User Question → Retriever → Relevant FUSED notes
+//    → Prompt Construction → Chat model → Answer
+//
+//  The retriever searches the unified (deduplicated)
+//  notes. If a project has no embedded notes yet (older
+//  projects, or the note index isn't built), it falls
+//  back to the raw source chunks so the chatbot still works.
+// ─────────────────────────────────────────────
+
+const { getChatModel } = require('./llmService');
+const {
+  retrieveRelevantNotes,
+  retrieveRelevantChunks,
+  retrieveRelevantQPChunks,
+} = require('./vectorSearchService');
+
+async function retrieveKnowledge(projectId, question) {
+  try {
+    const notes = await retrieveRelevantNotes(projectId, question, 5);
+    if (notes.length > 0) {
+      return {
+        context: notes
+          .map((n) => `[Topic: ${n.title} | from ${(n.sourceRefs && n.sourceRefs.length ? n.sourceRefs : n.sources || []).join(', ')}]\n${n.content}`)
+          .join('\n\n'),
+        sources: notes.flatMap((n) => (n.sourceRefs && n.sourceRefs.length ? n.sourceRefs : n.sources || [])),
+        found: true,
+      };
+    }
+  } catch (err) {
+    console.warn('[ragService] Note search unavailable, using raw chunks:', err.message);
+  }
+
+  const chunks = await retrieveRelevantChunks(projectId, question, 5);
+  return {
+    context: chunks
+      .map((c) => `[${c.sourceFileName}${c.pageNumber ? ` p.${c.pageNumber}` : ''}]\n${c.text}`)
+      .join('\n\n'),
+    sources: chunks.map((c) => `${c.sourceFileName}${c.pageNumber ? ` p.${c.pageNumber}` : ''}`),
+    found: chunks.length > 0,
+  };
+}
+
+/**
+ * Answer a user's question using only the project's fused knowledge base.
+ * @param {string} projectId
+ * @param {string} question
+ * @param {boolean} includeQP - also search question-paper chunks (exam-focused questions)
+ */
+async function answerQuestion(projectId, question, includeQP = false) {
+  const knowledge = await retrieveKnowledge(projectId, question);
+  const qpChunks = includeQP ? await retrieveRelevantQPChunks(projectId, question, 3) : [];
+
+  if (!knowledge.found && qpChunks.length === 0) {
+    return {
+      answer: "I couldn't find anything relevant to that in your fused knowledge base yet. Try rephrasing, or check that your documents finished processing.",
+      sources: [],
+    };
+  }
+
+  const qpContextBlocks = qpChunks
+    .map((c) => `[Question Paper: ${c.sourceFileName}]\n${c.text}`)
+    .join('\n\n');
+
+  const prompt = `You are DocNexus's study assistant. Answer the user's question using ONLY the context below, which comes from their own uploaded study materials. If the context doesn't contain the answer, say so honestly — do not make things up.
+
+Keep answers clear and exam-relevant. Use short paragraphs or bullet points where helpful.
+
+KNOWLEDGE BASE CONTEXT:
+${knowledge.context || '(no relevant notes found)'}
+
+${includeQP ? `PREVIOUS-YEAR QUESTION PAPER CONTEXT:\n${qpContextBlocks || '(no relevant question paper excerpts found)'}\n` : ''}
+
+QUESTION: ${question}
+
+Answer:`;
+
+  const model = getChatModel();
+  const response = await model.invoke(prompt);
+  const answer = typeof response.content === 'string' ? response.content : String(response.content);
+
+  const sources = [
+    ...new Set([
+      ...knowledge.sources,
+      ...qpChunks.map((c) => `Question Paper: ${c.sourceFileName}`),
+    ]),
+  ];
+
+  return { answer, sources };
+}
+
+module.exports = { answerQuestion };

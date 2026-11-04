@@ -8,33 +8,60 @@
 //      → Conflict Detection → Knowledge Fusion
 // ─────────────────────────────────────────────
 
-const { cosineSimilarity } = require('./embeddingService');
 const { getChatModel } = require('./llmService');
+const { throttle } = require('./rateLimiter');
 
-const TOPIC_MATCH_THRESHOLD = 0.80;   // chunks above this are "same topic"
-const DUPLICATE_THRESHOLD = 0.93;     // chunks above this are near-identical → dedupe
+const { hamming, NEAR_DUP_BITS } = require('./pdfImageService');
 
-/**
- * STEP 1 — Topic Matching
- * Groups chunks from possibly-different sources into topic clusters
- * based on embedding similarity. Greedy clustering: O(n^2) but fine
- * for a study-material-scale document set (hundreds of chunks).
- *
- * @param {Array<{_id, text, embedding, sourceFileName, pageNumber}>} chunks
- * @returns {Array<{ members: Array<chunk> }>} clusters
- */
-function clusterByTopic(chunks) {
+const MAX_IMAGES_PER_TOPIC = 10; // beyond this, extra figures go into a continuation note (never dropped)
+const FUSION_CONCURRENCY = 4; // few at once: a trial key stalls (not errors) when flooded // batches in flight at once (rateLimiter still enforces the per-minute cap)
+// The API is capped at ~18 calls/min, so the number of LLM calls IS the fusion
+// time. Bigger batches = fewer calls = faster. Kept at 8 so the JSON reply
+// (10 topics x ~130 words) stays safely inside the model's output limit.
+const TOPICS_PER_BATCH = 6;
+const MAX_EXCERPTS_PER_TOPIC = 6;
+const MAX_EXCERPT_CHARS = 1200;
+const CALL_TIMEOUT_MS = 30000; // one stuck API call must never freeze the whole project
+const FUSION_BUDGET_MS = Number(process.env.FUSION_BUDGET_MS) || 90000; // hard cap: after this, remaining topics are structured locally
+const LLM_MIN_SOURCES = process.env.FUSION_USE_AI === '0' ? Infinity : 2; // AI merge on by default (FUSION_USE_AI=0 switches it off)
+// // default: keep the source's own text and structure (no AI rewriting); FUSION_USE_AI=1 enables AI merge + conflict detection
+// (old)  // only topics that merge >=2 different excerpts need the AI; single excerpts are structured locally
+
+// Normalise once -> similarity becomes a plain dot product (3x less math than
+// recomputing norms for every pair, and no sqrt in the O(n^2) loops).
+function normalize(vec) {
+  const out = new Float32Array(vec.length);
+  let norm = 0;
+  for (let i = 0; i < vec.length; i++) norm += vec[i] * vec[i];
+  norm = Math.sqrt(norm) || 1;
+  for (let i = 0; i < vec.length; i++) out[i] = vec[i] / norm;
+  return out;
+}
+
+function dot(a, b) {
+  let s = 0;
+  for (let i = 0; i < a.length; i++) s += a[i] * b[i];
+  return s;
+}
+
+function prepare(chunks) {
+  return chunks.map((c) => ({ ...c, _vec: c._vec || normalize(c.embedding) }));
+}
+
+const TOPIC_MATCH_THRESHOLD = 0.77; // lower = fewer, bigger topics (fewer AI calls)
+const DUPLICATE_THRESHOLD = 0.93;
+
+function clusterByTopic(rawChunks) {
+  const chunks = prepare(rawChunks);
   const clusters = [];
   const assigned = new Array(chunks.length).fill(false);
-
   for (let i = 0; i < chunks.length; i++) {
     if (assigned[i]) continue;
     const cluster = { members: [chunks[i]] };
     assigned[i] = true;
-
     for (let j = i + 1; j < chunks.length; j++) {
       if (assigned[j]) continue;
-      const sim = cosineSimilarity(chunks[i].embedding, chunks[j].embedding);
+      const sim = dot(chunks[i]._vec, chunks[j]._vec);
       if (sim >= TOPIC_MATCH_THRESHOLD) {
         cluster.members.push(chunks[j]);
         assigned[j] = true;
@@ -45,69 +72,131 @@ function clusterByTopic(chunks) {
   return clusters;
 }
 
-/**
- * STEP 2 — Duplicate Detection
- * Within a topic cluster, mark near-identical chunks (same explanation
- * repeated across sources) so the fusion prompt doesn't have to read
- * the same paragraph five times. Keeps the longest/most-detailed
- * version as the "best" representative of each duplicate group.
- *
- * @param {Array<chunk>} members - chunks belonging to one topic cluster
- * @returns {{ deduped: Array<chunk>, duplicatesRemoved: number }}
- */
 function dedupeCluster(members) {
   const keep = [];
   const used = new Array(members.length).fill(false);
   let duplicatesRemoved = 0;
-
   for (let i = 0; i < members.length; i++) {
     if (used[i]) continue;
     const group = [members[i]];
     used[i] = true;
-
     for (let j = i + 1; j < members.length; j++) {
       if (used[j]) continue;
-      const sim = cosineSimilarity(members[i].embedding, members[j].embedding);
+      const sim = dot(members[i]._vec || normalize(members[i].embedding), members[j]._vec || normalize(members[j].embedding));
       if (sim >= DUPLICATE_THRESHOLD) {
         group.push(members[j]);
         used[j] = true;
       }
     }
-
-    // Keep the longest text in the group as the representative version
-    const best = group.reduce((a, b) => (b.text.length > a.text.length ? b : a));
+    const best = { ...group.reduce((a, b) => (b.text.length > a.text.length ? b : a)) };
+    // never lose a figure just because its text was a duplicate
+    best.images = group.flatMap((g) => g.images || []);
+    best._pages = group.map((g) => `${g.sourceFileName}#${g.pageNumber}`);
     keep.push(best);
     duplicatesRemoved += group.length - 1;
   }
-
   return { deduped: keep, duplicatesRemoved };
 }
 
-/**
- * STEP 3 + 4 — Conflict Detection & Knowledge Fusion (LLM-assisted, BATCHED)
- * Instead of one LLM call per topic cluster (which can mean 15-20+ calls
- * for a typical upload — too many for a free-tier daily request cap),
- * this sends SEVERAL clusters in one prompt and asks for fused results
- * for all of them in one structured JSON response.
- *
- * For each cluster in the batch, asks the LLM to:
- *   1. Give the cluster a clean topic title
- *   2. Write one unified, well-written explanation citing source files
- *   3. Flag if sources genuinely contradict each other
- *
- * @param {Array<Array<chunk>>} dedupedClusters - each inner array is one
- *   cluster's deduped chunks
- * @returns {Promise<Array<fusedResult>>} one result per input cluster, in order
- */
-async function fuseClusterBatch(dedupedClusters) {
-  const model = getChatModel();
+// Fusion only summarises/restructures text, so the faster non-"plus" model is plenty
+// and answers several times quicker. Falls back to the default model if unavailable.
+let fusionModel = null;
+function getFusionModel() {
+  if (!fusionModel) {
+    try { fusionModel = getChatModel({ model: process.env.FUSION_MODEL || 'command-r-08-2024', maxRetries: 1 }); }
+    catch (e) { fusionModel = getChatModel(); }
+  }
+  return fusionModel;
+}
 
+
+// ── Local (no-AI) note structuring: instant, used for single-excerpt topics and as the
+// fallback whenever an AI call is slow or fails. Works from the section markers written by
+// structuredPdf ("## title", "### sub-heading", "- bullet", "1. item", plain paragraphs).
+const ABBR = /\b(e\.g|i\.e|etc|vs|fig|dr|mr|mrs|ms|prof|no|approx|cf|dept|asst|assoc|inc|ltd|st|jr|sr|al|ch|sec|eq|vol|pp)\./gi;
+function splitSentences(text) {
+  const t = String(text)
+    .replace(ABBR, (m) => m.replace(/\./g, '\u0001'))
+    .replace(/(^|[\s(])([A-Z])\./g, (m, a, b) => `${a}${b}\u0001`) // initials: "M. Tech"
+    .replace(/\s+/g, ' ')
+    .trim();
+  const raw = (t.match(/[^.!?]+(?:[.!?]+["”’)]*(?=\s|$)|$)/g) || []).map((x) => x.replace(/\u0001/g, '.').trim()).filter(Boolean);
+  // glue tiny fragments ("2.)", "of ISE") onto the previous sentence instead of making them bullets
+  const out = [];
+  for (const sn of raw) {
+    if (sn.replace(/[^A-Za-z]/g, '').length < 8 && out.length) out[out.length - 1] += ' ' + sn;
+    else out.push(sn);
+  }
+  return out.filter((x) => x.replace(/[^A-Za-z]/g, '').length >= 3);
+}
+function cutAtWord(t, n) {
+  if (t.length <= n) return t;
+  const k = t.lastIndexOf(' ', n);
+  return t.slice(0, k > n * 0.6 ? k : n).replace(/[,;:\-–]+$/, '') + '…';
+}
+function tidyTitle(t) {
+  const x = String(t || '').replace(/^\(?\d+(\.\d+)*[.)]?\s+/, '').replace(/[:\-–.]+$/, '').replace(/\s+/g, ' ').trim();
+  return cutAtWord(x, 80);
+}
+
+function structureLocally(chunks) {
+  let title = '';
+  const items = [];
+  const seen = new Set();
+  for (const c of chunks) {
+    for (const raw of String(c.text || '').split('\n')) {
+      const line = raw.trim();
+      if (!line) continue;
+      const level = Math.min(2, Math.floor((raw.match(/^\s*/)[0].length) / 2));
+      let m;
+      if ((m = line.match(/^##(?!#)\s*(.*)$/))) { if (!title && m[1].trim()) title = m[1].trim(); continue; }
+      let item;
+      if ((m = line.match(/^###\s+(.+)$/))) item = { type: 'sub', text: m[1] };
+      else if ((m = line.match(/^-\s+(.+)$/))) item = { type: 'bullet', text: m[1], level };
+      else if (/^\d{1,2}[.)]\s+\S/.test(line)) item = { type: 'num', text: line };
+      else item = { type: 'para', text: line };
+      const key = item.text.toLowerCase().replace(/\W+/g, '');
+      if (!key || seen.has(key)) continue; // same line coming from two sources
+      if (item.type !== 'sub' && item.text.replace(/[^A-Za-z]/g, '').length < 8) continue; // stray fragments ("of ISE")
+      seen.add(key);
+      items.push(item);
+    }
+  }
+  // Keep the source's own structure: paragraphs stay paragraphs, sub-headings stay headings,
+  // bullets and numbered lines stay as they were (nothing is chopped into sentence bullets).
+  if (!title) {
+    const first = (items[0] && items[0].text) || 'Notes';
+    title = first.split(/\s+/).slice(0, 6).join(' ');
+  }
+  const out = [];
+  const MAX_LINES = 400;
+  for (const it of items) {
+    if (out.length >= MAX_LINES) break;
+    if (it.type === 'sub') out.push('', `### ${it.text}`);
+    else if (it.type === 'bullet') out.push(`${'  '.repeat(it.level || 0)}- ${it.text}`);
+    else if (it.type === 'num') out.push(it.text);
+    else out.push('', it.text);
+  }
+  const content = out.join('\n').replace(/\n{3,}/g, '\n\n').trim() || String(chunks[0]?.text || '').slice(0, 400);
+  return { title: tidyTitle(title) || 'Notes', content };
+}
+
+function withTimeout(promise, ms) {
+  let t;
+  const timeout = new Promise((_, rej) => { t = setTimeout(() => rej(new Error(`timed out after ${ms / 1000}s`)), ms); });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
+}
+
+async function fuseClusterBatch(clusterItems, deadline) {
+  const model = getFusionModel();
+  const dedupedClusters = clusterItems.map((ci) => ci.chunks);
   const clusterBlocks = dedupedClusters
     .map((deduped, clusterIdx) => {
+      // A huge topic must not blow up the prompt: keep at most 6 excerpts of <=1200 chars each.
       const sourceBlocks = deduped
-        .map(
-          (c, idx) =>
-            `  [Source ${idx + 1}: ${c.sourceFileName}${c.pageNumber ? `, page ${c.pageNumber}` : ''}]\n  ${c.text}`
+        .slice(0, MAX_EXCERPTS_PER_TOPIC)
+        .map((c, idx) =>
+          `  [Source ${idx + 1}: ${c.sourceFileName}${c.pageNumber ? `, page ${c.pageNumber}` : ''}]\n  ${String(c.text).slice(0, MAX_EXCERPT_CHARS)}`
         )
         .join('\n\n  ---\n\n');
       return `### TOPIC GROUP ${clusterIdx + 1}\n${sourceBlocks}`;
@@ -117,9 +206,18 @@ async function fuseClusterBatch(dedupedClusters) {
   const prompt = `You are the Knowledge Fusion Engine of DocNexus, a study-notes consolidation tool.
 You are given ${dedupedClusters.length} separate TOPIC GROUPS. Each group contains several excerpts from different study sources that all discuss the SAME topic as each other (but different groups cover different topics).
 
+Excerpts use light Markdown: a line starting "## " is the section title, "### " a sub-heading, "- " a bullet, "1. " a numbered item. Ignore the markers in your answer except to understand structure.
+
 For EACH topic group, independently:
 1. Pick a short, clean topic title (3-6 words, e.g. "Deadlock", "TCP Handshake").
-2. Write ONE unified, well-organized explanation that merges all the correct information from that group's excerpts into clear prose (120-220 words). Do not just concatenate the excerpts — synthesize them.
+2. Write ONE unified set of STUDY NOTES that MERGES the information from that group's excerpts into a single, well-organised explanation (this is the whole point: combine the sources, remove repetition, keep everything that is distinct). The notes must read like proper textbook-style study notes, NOT a flat list of bullet points:
+   - Start with the definition / introduction as one or two normal sentences (a paragraph).
+   - Use short paragraphs for explanations and descriptions; do not turn every sentence into a bullet.
+   - Use "- " bullets ONLY for genuine lists (types, components, features, items, advantages...), and "1. " numbered lines for steps/stages/ordered procedures. Nested items can be indented by two spaces.
+   - Organise the topic with bold sub-heading lines (a line containing only "**Sub-heading**") wherever the content has different parts (for example Definition, Types, Process, Formula, Advantages, Example). Take these sub-headings from the excerpts' own headings where they exist, otherwise name them yourself in 1-4 words that describe that part. Do NOT use the sub-headings "Key Points", "Summary" or "Remember".
+   - Put important terms in **bold** inside sentences.
+   - Keep every distinct fact, definition, number, formula, example and list item from the excerpts; remove only repeated information. Length follows the content (roughly 100-350 words), never cut facts just to be short.
+   Use ONLY facts that are written in the excerpts. NEVER add your own commentary: no "Overall Summary", no guesses ("likely", "probably", "appears to"), no remarks about figures, tables or pages that are not described in the text, no mention of "the excerpts" or sources.
 3. Determine if that group's excerpts genuinely CONTRADICT each other on a factual point (e.g. different numeric values, different step counts, opposing claims). Minor differences in wording or detail level are NOT conflicts.
 
 Respond ONLY with strict JSON in this exact shape, no markdown fences, no extra text. The "results" array must have exactly ${dedupedClusters.length} entries, in the same order as the topic groups given:
@@ -144,114 +242,244 @@ If hasConflict is false for a group, set every field inside its "conflict" to nu
 TOPIC GROUPS:
 ${clusterBlocks}`;
 
-  const response = await model.invoke(prompt);
-  const raw = typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
-
-  let parsedResults;
-  try {
-    const parsed = JSON.parse(stripCodeFences(raw));
-    parsedResults = Array.isArray(parsed.results) ? parsed.results : [];
-  } catch (err) {
-    parsedResults = [];
+  let parsedResults = [];
+  for (let attempt = 0; attempt < 2 && parsedResults.length !== dedupedClusters.length; attempt++) {
+    if (deadline && Date.now() > deadline) break;
+    await throttle();
+    let response;
+    try {
+      response = await withTimeout(getFusionModel().invoke(prompt), CALL_TIMEOUT_MS);
+    } catch (err) {
+      console.error(`[fusionEngine] AI call failed (attempt ${attempt + 1}): ${String(err.message).slice(0, 160)}`);
+      // if the fast model isn't available for this key, fall back to the default model
+      if (/model|not found|404|unsupported/i.test(err.message) ) fusionModel = getChatModel();
+      continue;
+    }
+    const raw = typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
+    try {
+      const parsed = JSON.parse(stripCodeFences(raw));
+      parsedResults = Array.isArray(parsed.results) ? parsed.results : [];
+    } catch (err) {
+      parsedResults = [];
+    }
   }
 
-  return dedupedClusters.map((deduped, idx) => {
-    const parsed = parsedResults[idx];
-    const sources = [...new Set(deduped.map((c) => c.sourceFileName))];
-    const images = [...new Set(deduped.map((c) => c.imageUrl).filter(Boolean))];
+  return clusterItems.map((item, idx) => buildNote(item, parsedResults[idx]));
+}
 
-    // Fallback for a missing/malformed entry in the batch response —
-    // degrade gracefully for that one topic instead of losing the batch.
-    if (!parsed) {
-      return {
-        title: deduped[0].text.slice(0, 40).split('\n')[0],
-        content: deduped.map((c) => c.text).join(' '),
-        sources,
-        images,
-        hasConflict: false,
-        conflict: null,
-      };
-    }
+// Turn one cluster (+ the LLM's answer, if we got one) into a note. Without an
+// LLM answer we still keep every source excerpt and figure, never drop them.
+function buildNote({ chunks, images, rawMembers }, parsed) {
+  const sources = [...new Set(chunks.map((c) => c.sourceFileName))];
+  // every file+page that fed this topic (including excerpts removed as duplicates),
+  // used for the chatbot's citations
+  const sourceRefs = [
+    ...new Set(
+      (rawMembers || chunks)
+        .slice()
+        .sort((a, b) => a.sourceFileName.localeCompare(b.sourceFileName) || (a.pageNumber || 0) - (b.pageNumber || 0))
+        .map((c) => `${c.sourceFileName}${c.pageNumber ? ` p.${c.pageNumber}` : ''}`)
+    ),
+  ];
+  const allDiagrams = images.map((img) => ({
+    image: img.image,
+    description: `Figure from ${img.sourceFileName}${img.pageNumber ? `, page ${img.pageNumber}` : ''}`,
+  }));
+  const diagrams = allDiagrams.slice(0, MAX_IMAGES_PER_TOPIC);
+  const extraDiagrams = allDiagrams.slice(MAX_IMAGES_PER_TOPIC);
 
+  if (!parsed || !parsed.title || !parsed.content) {
+    const local = structureLocally(chunks);
     return {
-      title: parsed.title,
-      content: parsed.content,
+      title: local.title,
+      content: local.content,
       sources,
-      images,
-      hasConflict: !!parsed.hasConflict,
-      conflict: parsed.hasConflict
-        ? {
-            topic: parsed.title,
-            sourceA: { name: parsed.conflict?.sourceAName, claim: parsed.conflict?.sourceAClaim },
-            sourceB: { name: parsed.conflict?.sourceBName, claim: parsed.conflict?.sourceBClaim },
-            recommended: parsed.conflict?.recommended,
-          }
-        : null,
+      sourceRefs,
+      diagrams,
+      extraDiagrams,
+      hasConflict: false,
+      conflict: null,
     };
+  }
+
+  return {
+    title: parsed.title,
+    content: parsed.content,
+    sources,
+    sourceRefs,
+    diagrams,
+    extraDiagrams,
+    hasConflict: !!parsed.hasConflict,
+    conflict: parsed.hasConflict
+      ? {
+          topic: parsed.title,
+          sourceA: { name: parsed.conflict?.sourceAName, claim: parsed.conflict?.sourceAClaim },
+          sourceB: { name: parsed.conflict?.sourceBName, claim: parsed.conflict?.sourceBClaim },
+          recommended: parsed.conflict?.recommended,
+        }
+      : null,
+  };
+}
+
+/**
+ * Decide which topic each figure belongs to, ONCE across all combined documents.
+ *  - The same figure in several PDFs (near-identical perceptual hash) is merged into one.
+ *  - Every chunk of a page carries that page's figures, so the figure goes to the
+ *    topic that holds most of that page's text (not just the first chunk of the page).
+ */
+function assignImages(clusters) {
+  const canon = []; // { phash, image record, votes: Map(clusterIdx -> count) }
+  clusters.forEach((cluster, ci) => {
+    for (const chunk of cluster.rawMembers) {
+      for (const img of chunk.images || []) {
+        let entry = canon.find((e) => {
+          if (!(img.phash && e.phash)) return e.image === img.image;
+          const d = hamming(e.phash, img.phash);
+          if (d <= NEAR_DUP_BITS) return true;
+          // the same table/figure printed in two different documents is rendered at a different size and
+          // quality, so allow a looser match there (but only with the same shape)
+          const ar = (a) => (a.width && a.height ? a.width / a.height : 0);
+          return e.rec.sourceFileName !== chunk.sourceFileName && d <= 10 && ar(e.rec) && Math.abs(ar(e.rec) - ar(img)) < 0.05;
+        });
+        if (!entry) {
+          entry = { phash: img.phash, rec: { ...img, sourceFileName: chunk.sourceFileName }, votes: new Map() };
+          canon.push(entry);
+        }
+        entry.votes.set(ci, (entry.votes.get(ci) || 0) + 1);
+      }
+    }
   });
+  clusters.forEach((c) => (c.images = []));
+  for (const e of canon) {
+    let best = -1, bestVotes = 0;
+    for (const [ci, v] of e.votes) if (v > bestVotes || (v === bestVotes && ci < best)) { best = ci; bestVotes = v; }
+    if (best >= 0) clusters[best].images.push(e.rec);
+  }
+  clusters.forEach((c) => c.images.sort((a, b) => (a.pageNumber || 0) - (b.pageNumber || 0)));
 }
 
 function stripCodeFences(text) {
   return text.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
 }
 
-/**
- * Full fusion pipeline entry point.
- * @param {Array<chunk>} allChunks - all chunks (with embeddings) for a project
- * @returns {Promise<{ notes: Array, conflicts: Array, duplicatesRemoved: number, sourcesUsed: number }>}
- */
-async function runFusion(allChunks) {
+async function runFusion(allChunks, { onProgress } = {}) {
   const clusters = clusterByTopic(allChunks);
-
   let totalDuplicatesRemoved = 0;
-  const notes = [];
-  const conflicts = [];
-
-  // Dedupe every cluster first (cheap, no LLM calls), then batch the
-  // LLM-requiring fusion step. Grouping several topics into ONE prompt
-  // turns what used to be "1 call per topic" (often 15-20+ calls per
-  // upload) into "1 call per ~6 topics" — comfortably inside a free-tier
-  // daily request cap (e.g. Gemini's 20/day on some projects).
-  const TOPICS_PER_BATCH = 6;
-  const CALL_DELAY_MS = 4500; // still pace between batches to respect per-minute limits too
-
-  const dedupedClusters = [];
+  const items = [];
   for (const cluster of clusters) {
     const { deduped, duplicatesRemoved } = dedupeCluster(cluster.members);
     totalDuplicatesRemoved += duplicatesRemoved;
-    if (deduped.length > 0) dedupedClusters.push(deduped);
+    if (deduped.length > 0) items.push({ chunks: deduped, rawMembers: cluster.members, images: [] });
   }
+  assignImages(items);
 
-  for (let i = 0; i < dedupedClusters.length; i += TOPICS_PER_BATCH) {
-    const batch = dedupedClusters.slice(i, i + TOPICS_PER_BATCH);
+  // Only topics that merge several excerpts need the AI; the rest are structured instantly.
+  const llmItems = items.filter((it) => it.chunks.length >= LLM_MIN_SOURCES);
+  const noteByItem = new Map();
+  items.forEach((it) => { if (it.chunks.length < LLM_MIN_SOURCES) noteByItem.set(it, buildNote(it, null)); });
 
-    try {
-      const fusedBatch = await fuseClusterBatch(batch);
-      fusedBatch.forEach((fused) => {
-        notes.push(fused);
-        if (fused.hasConflict) conflicts.push(fused.conflict);
+  const batches = [];
+  for (let i = 0; i < llmItems.length; i += TOPICS_PER_BATCH) batches.push(llmItems.slice(i, i + TOPICS_PER_BATCH));
+  console.log(`[fusionEngine] ${allChunks.length} chunks -> ${items.length} topics (${llmItems.length} need AI merge in ${batches.length} calls, ${items.length - llmItems.length} structured instantly)`);
+
+  const deadline = Date.now() + FUSION_BUDGET_MS;
+  let next = 0;
+  let done = 0;
+  async function worker() {
+    while (next < batches.length) {
+      const idx = next++;
+      const batch = batches[idx];
+      let out;
+      if (Date.now() > deadline) {
+        out = batch.map((item) => buildNote(item, null)); // out of time: instant local structure
+        console.log(`[fusionEngine] batch ${idx + 1}/${batches.length} structured locally (time budget reached)`);
+      } else {
+        try {
+          out = await fuseClusterBatch(batch, deadline);
+          console.log(`[fusionEngine] batch ${idx + 1}/${batches.length} done`);
+        } catch (err) {
+          console.error(`[fusionEngine] batch ${idx + 1} failed, structured locally:`, err.message);
+          out = batch.map((item) => buildNote(item, null));
+        }
+      }
+      batch.forEach((item, i) => noteByItem.set(item, out[i]));
+      done++;
+      if (onProgress) onProgress(done, batches.length);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(FUSION_CONCURRENCY, batches.length) }, worker));
+  const ordered = items.map((it) => noteByItem.get(it) || buildNote(it, null));
+
+  const notes = [];
+  const conflicts = [];
+  ordered.forEach((fused) => {
+    // Remember WHICH conflict belongs to this note by position, not by title
+    // (two notes can end up with the same title).
+    if (fused.hasConflict && fused.conflict) {
+      fused.conflictIndex = conflicts.length;
+      conflicts.push(fused.conflict);
+    } else {
+      fused.hasConflict = false;
+    }
+    notes.push(fused);
+    // figures that didn't fit on the topic's note continue in follow-up notes
+    const extra = fused.extraDiagrams || [];
+    delete fused.extraDiagrams;
+    for (let i = 0; i < extra.length; i += MAX_IMAGES_PER_TOPIC) {
+      notes.push({
+        title: `${fused.title} — more figures`,
+        content: `Additional figures for "${fused.title}" from the source documents.`,
+        sources: fused.sources,
+        sourceRefs: fused.sourceRefs,
+        diagrams: extra.slice(i, i + MAX_IMAGES_PER_TOPIC),
+        hasConflict: false,
+        conflict: null,
       });
-    } catch (err) {
-      // An entire batch failing after retries (e.g. sustained outage)
-      // shouldn't take down the whole upload — log it and continue with
-      // whatever other batches succeed, so the user still gets partial
-      // results instead of nothing.
-      console.error(`[fusionEngine] Batch starting at topic ${i} failed after retries, skipping:`, err.message);
     }
+  });
 
-    if (i + TOPICS_PER_BATCH < dedupedClusters.length) {
-      await new Promise((resolve) => setTimeout(resolve, CALL_DELAY_MS));
+  // ── tidy: merge the parts of one section, fold in fragments, drop empty label-only notes ──
+  const baseTitle = (t) => String(t).replace(/\s*\(cont\.\)\s*$/i, '').trim().toLowerCase();
+  const bodyOf = (c) => String(c).split('\n').filter((l) => !/^\s*#{2,3}\s/.test(l)).join(' ').replace(/[-•]\s/g, ' ').replace(/\s+/g, ' ').trim();
+  const merged = [];
+  const byTitle = new Map();
+  for (const n of notes) {
+    const key = baseTitle(n.title);
+    const prior = byTitle.get(key);
+    if (prior && /\(cont\.\)\s*$/i.test(n.title) && !n.hasConflict && !prior.hasConflict) { // only the continuation parts of a split section
+      prior.content = `${prior.content}\n${String(n.content).replace(/^#{2}\s.*\n?/, '')}`.trim();
+      prior.sources = [...new Set([...(prior.sources || []), ...(n.sources || [])])];
+      prior.sourceRefs = [...new Set([...(prior.sourceRefs || []), ...(n.sourceRefs || [])])];
+      prior.diagrams = [...(prior.diagrams || []), ...(n.diagrams || [])];
+      continue;
     }
+    merged.push(n);
+    if (!/more figures$/.test(n.title)) byTitle.set(key, n);
   }
+  const tidied = [];
+  for (const n of merged) {
+    const hasPics = (n.diagrams || []).length > 0;
+    const body = bodyOf(n.content);
+    if (!hasPics && !n.hasConflict && body.length < 80) {
+      continue; // a title with (almost) nothing under it is not added at all
+    }
+    tidied.push(n);
+  }
+  tidied.forEach((n) => { n.title = String(n.title).replace(/\s*\(cont\.\)\s*$/i, '').trim(); }); // never show the label
+  // sub-headings with nothing under them (labels of content that was a table/diagram) are noise
+  const isHead = (l) => /^\s*#{2,6}\s*\S/.test(l) || /^\s*\*\*[^*]{2,60}?:?\*\*:?\s*$/.test(l);
+  tidied.forEach((n) => {
+    const ls = String(n.content).split('\n');
+    n.content = ls.filter((l, i) => {
+      if (!isHead(l) || /^\s*##\s/.test(l) && !/^\s*###/.test(l)) return true;
+      const nxt = ls.slice(i + 1).find((x) => x.trim());
+      return nxt !== undefined && !isHead(nxt);
+    }).join('\n');
+  });
+  // conflicts are linked by index into `conflicts`, which merging did not touch
 
   const sourcesUsed = new Set(allChunks.map((c) => c.sourceFileName)).size;
-
-  return {
-    notes,
-    conflicts,
-    duplicatesRemoved: totalDuplicatesRemoved,
-    sourcesUsed,
-  };
+  return { notes: tidied, conflicts, duplicatesRemoved: totalDuplicatesRemoved, sourcesUsed };
 }
 
-module.exports = { runFusion, clusterByTopic, dedupeCluster, fuseClusterBatch };
+module.exports = { runFusion, clusterByTopic, dedupeCluster, fuseClusterBatch, structureLocally };

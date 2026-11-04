@@ -25,10 +25,6 @@ const chunkSchema = new mongoose.Schema(
 
     embedding: { type: [Number], required: true }, // length 1024
 
-    // Set only for chunks whose page contains a diagram/chart, so the
-    // fusion step can attach the actual image to the resulting note.
-    imageUrl: { type: String, default: null },
-
     // Filled in during fusion (topic matching / dedupe), optional until then
     topicLabel: { type: String, default: null },
     isDuplicate: { type: Boolean, default: false },

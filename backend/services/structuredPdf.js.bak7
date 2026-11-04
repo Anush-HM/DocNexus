@@ -1,0 +1,362 @@
+// backend/services/structuredPdf.js
+// ─────────────────────────────────────────────
+//  Structure-aware PDF reading + sectioning.
+//
+//  Replaces "flatten everything to one string, cut every 1000 characters":
+//   1. Rebuilds real LINES from the PDF's text items (fixes words split in
+//      the middle, like "c ontrol" / "mil estones").
+//   2. Drops page furniture: running headers/footers, page numbers, download
+//      watermarks (e.g. "lOMoARcPSD|123", "Downloaded by ...").
+//   3. Recognises headings, sub-headings, bullets, numbered items, paragraphs.
+//   4. Cuts the document into SECTIONS by heading (never mid-sentence), so each
+//      chunk is one coherent topic with a real title.
+// ─────────────────────────────────────────────
+
+const fs = require('fs');
+const path = require('path');
+
+let pdfjsPromise = null;
+function getPdfjs() {
+  if (!pdfjsPromise) pdfjsPromise = import('pdfjs-dist/legacy/build/pdf.mjs');
+  return pdfjsPromise;
+}
+
+const MAX_SECTION_CHARS = 2400; // longer sections are split at block boundaries
+const PART_TARGET_CHARS = 1700;
+const MIN_SECTION_CHARS = 300;  // shorter sections are folded into the previous one
+
+// ── helpers ────────────────────────────────────────────────────────────────
+
+const BULLET_RE = /^(?:[•▪■●◦○▫·]|o(?=\s+\S)|[-–—](?=\s+\S))\s+/;
+const NUM_RE = /^(?:\(?\d{1,2}[.)]|\([a-z]\)|[a-z][.)])\s+\S/;
+const NOISE_RES = [
+  /lOMoAR/i, /downloaded by\b/i, /this document is available on/i, /studocu/i,
+  /^page\s*\|?\s*\d+(\s*\|.*)?$/i, /^\d+\s*\|\s*page$/i, /^page\s+\d+(\s+of\s+\d+)?$/i,
+  /^[\w.]*@?[\w.]*\.com\)?$/i, /^\W*\d{1,4}\W*$/, /^[A-Z]{2,4}\s+\d{1,2}\/\d{1,2}\/\d{2,4}\b.*\bpage\s+\d+/i,
+];
+
+function cleanInline(s) {
+  return String(s)
+    .replace(/[   ]/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\s+([,.;:!?%)\]])/g, '$1')
+    .replace(/([(\[])\s+/g, '$1')
+    .replace(/\s*([’'])\s*(?=(?:s|t|re|ve|ll|d|m)\b)/gi, '$1')
+    .trim()
+    .replace(/^(.{5,}?)\s*\1$/, '$1'); // text drawn twice (shadow/bold trick) -> once
+}
+
+
+// A word broken by a line-end hyphen ("identifi- cation") vs a real compound ("problem- solving").
+// Decide with the document's own vocabulary: if "identification" appears elsewhere -> join;
+// if "problem-solving" appears elsewhere -> keep the hyphen; otherwise join (most are broken words).
+let VOCAB = new Set();
+function buildVocab(lines) {
+  const v = new Set();
+  for (const t of lines) for (const w of t.toLowerCase().split(/\s+/)) {
+    const x = w.replace(/^[^a-z]+|[^a-z-]+$/g, '');
+    if (x.length >= 3) v.add(x);
+  }
+  VOCAB = v;
+}
+function joinHyphen(left, right) {
+  const frag = /([A-Za-z]+)-$/.exec(left);
+  const first = /^[a-z]+/.exec(right);
+  if (!frag || !first) return left + ' ' + right;
+  const lw = frag[1].toLowerCase(), rw = first[0];
+  if (VOCAB.has(`${lw}-${rw}`)) return left + right; // real compound seen elsewhere: keep hyphen
+  return left.slice(0, -1) + right;                  // otherwise a broken word: join
+}
+function fixInlineHyphens(t) {
+  return t.replace(/\b([A-Za-z]{2,})- ([a-z]{2,})/g, (m, l, r) => {
+    const lw = l.toLowerCase(), rw = r.toLowerCase();
+    if (VOCAB.has(`${lw}-${rw}`)) return `${l}-${r}`;
+    if (VOCAB.has(lw + rw) || lw.length <= 4 || /^(tion|tions|cation|ment|ments|ing|ness|ity|ation|able|ible|ance|ence|ously|ally|ized|ised|ures?|ful|less|ship|ically|ly|ed|er|ers|es|al|ive|ous|ure|opment|ants?|ents?|quate|nal|ards?)$/.test(rw)) return l + r;
+    return `${l}-${r}`;
+  });
+}
+
+function numOf(t) {
+  const m = /^\(?(\d{1,2})[.)]\s+\S/.exec(t);
+  return m ? Number(m[1]) : null;
+}
+
+function normKey(s) {
+  return s.toLowerCase().replace(/\d+/g, '#').replace(/\s+/g, ' ').trim();
+}
+
+function stripNumbering(t) {
+  return t.replace(/^\(?\d+(\.\d+)*[.)]?\s+/, '').replace(/^[A-Z][.)]\s+/, '').trim();
+}
+
+// ── per-page line reconstruction ──────────────────────────────────────────
+
+function buildLines(items) {
+  const toks = [];
+  for (const it of items) {
+    if (typeof it.str !== 'string') continue;
+    const h = Math.abs(it.transform[3]) || it.height || 10;
+    toks.push({ str: it.str, x: it.transform[4], y: it.transform[5], w: it.width || 0, h });
+  }
+  toks.sort((a, b) => b.y - a.y || a.x - b.x);
+
+  const lines = [];
+  for (const t of toks) {
+    const last = lines[lines.length - 1];
+    if (last && Math.abs(last.y - t.y) <= Math.max(2, last.h * 0.4)) {
+      last.toks.push(t);
+      last.h = Math.max(last.h, t.h);
+    } else {
+      lines.push({ y: t.y, h: t.h, toks: [t] });
+    }
+  }
+
+  const toText = (toks, h) => {
+    toks.sort((a, b) => a.x - b.x);
+    let text = '';
+    let prev = null;
+    for (const t of toks) {
+      if (prev) {
+        const gap = t.x - (prev.x + prev.w);
+        const needSpace = gap > h * 0.14 || /\s$/.test(prev.str) || /^\s/.test(t.str);
+        if (needSpace && !/\s$/.test(text)) text += ' ';
+      }
+      text += t.str;
+      prev = t;
+    }
+    return cleanInline(text);
+  };
+  const mk = (toks, y, h) => ({
+    text: toText(toks, h), y, h,
+    x0: Math.min(...toks.map((t) => t.x)),
+    x1: Math.max(...toks.map((t) => t.x + t.w)),
+  });
+
+  // split every row at wide gutters (candidate columns)
+  const rows = lines.map((l) => {
+    const toks = l.toks.slice().sort((a, b) => a.x - b.x);
+    const segs = [];
+    let cur = [toks[0]];
+    for (let i = 1; i < toks.length; i++) {
+      const gap = toks[i].x - (toks[i - 1].x + toks[i - 1].w);
+      if (gap > Math.max(2 * l.h, 18)) { segs.push(cur); cur = []; }
+      cur.push(toks[i]);
+    }
+    segs.push(cur);
+    return { y: l.y, h: l.h, toks, segs: segs.map((sg) => mk(sg, l.y, l.h)), whole: mk(toks, l.y, l.h) };
+  });
+
+  // two-column page? (many long segments wholly left AND wholly right of the middle)
+  const all = rows.flatMap((r) => r.segs);
+  if (!all.length) return [];
+  const minX = Math.min(...all.map((x) => x.x0));
+  const maxX = Math.max(...all.map((x) => x.x1));
+  const midX = (minX + maxX) / 2;
+  const long = all.filter((x) => x.text.length >= 28);
+  const nLeft = long.filter((x) => x.x1 <= midX + 6).length;
+  const nRight = long.filter((x) => x.x0 >= midX - 6).length;
+  const twoCol = nLeft >= 10 && nRight >= 10;
+
+  if (!twoCol) return rows.map((r) => r.whole).filter((l) => l.text.length > 0);
+
+  const out = [];
+  let left = [];
+  let right = [];
+  const flush = () => { out.push(...left, ...right); left = []; right = []; };
+  for (const r of rows) {
+    const spans = r.segs.some((x) => x.x0 < midX - 6 && x.x1 > midX + 6);
+    const wide = r.segs.length === 1 && r.segs[0].x1 - r.segs[0].x0 > (maxX - minX) * 0.6;
+    if (spans || wide) { flush(); out.push(r.whole); continue; }
+    r.segs.forEach((x) => (x.x0 < midX - 6 || x.x1 <= midX + 6 ? left : right).push(x));
+  }
+  flush();
+  return out.filter((l) => l.text.length > 0);
+}
+
+// ── main extraction ───────────────────────────────────────────────────────
+
+/**
+ * @returns {Promise<{ text:string, pages:string[], pageCount:number, chunks:{text:string,title:string,pageNumber:number,pageNumbers:number[],part:number}[] }>}
+ */
+async function extractStructured(filePath) {
+  const pdfjsLib = await getPdfjs();
+  const data = new Uint8Array(fs.readFileSync(filePath));
+  const standardFontDataUrl =
+    path.join(path.dirname(require.resolve('pdfjs-dist/package.json')), 'standard_fonts').split(path.sep).join('/') + '/';
+  const task = pdfjsLib.getDocument({ data, disableFontFace: true, standardFontDataUrl, verbosity: 0 });
+  const pdf = await task.promise;
+
+  const pageLines = [];
+  try {
+    for (let p = 1; p <= pdf.numPages; p++) {
+      const page = await pdf.getPage(p);
+      try {
+        const tc = await page.getTextContent();
+        pageLines.push(buildLines(tc.items));
+      } finally {
+        page.cleanup();
+      }
+    }
+  } finally {
+    await task.destroy();
+  }
+
+  // ── drop page furniture ──
+  const pageCount = pageLines.length;
+  const keyPages = new Map();
+  pageLines.forEach((lines, pi) => {
+    const seen = new Set();
+    lines.forEach((l) => {
+      if (l.text.length > 90) return;
+      const k = normKey(l.text);
+      if (!seen.has(k)) { seen.add(k); (keyPages.get(k) || keyPages.set(k, new Set()).get(k)).add(pi); }
+    });
+  });
+  const repeatMin = Math.max(3, Math.ceil(pageCount * 0.3));
+  // running headers/footers: the same short line in the first/last two lines of several pages
+  const marginPages = new Map();
+  pageLines.forEach((lines, pi) => {
+    const m = [...lines.slice(0, 2), ...lines.slice(-2)];
+    new Set(m.filter((l) => l.text.length <= 90).map((l) => normKey(l.text))).forEach((k) => {
+      (marginPages.get(k) || marginPages.set(k, new Set()).get(k)).add(pi);
+    });
+  });
+  const marginMin = Math.max(3, Math.ceil(pageCount * 0.08));
+  const isMargin = (l, lines) => {
+    const i = lines.indexOf(l);
+    return (i < 2 || i >= lines.length - 2) && (marginPages.get(normKey(l.text))?.size || 0) >= marginMin;
+  };
+  const isFurniture = (l, lines) =>
+    isMargin(l, lines) ||
+    NOISE_RES.some((re) => re.test(l.text)) || (keyPages.get(normKey(l.text))?.size || 0) >= repeatMin;
+  const spacedLetters = (t) => { const w = t.split(' '); return w.length >= 5 && w.filter((x) => x.length <= 1).length / w.length >= 0.7; };
+  const cleanPages = pageLines.map((lines) => {
+    const kept = lines.filter((l) => !isFurniture(l, lines) && !spacedLetters(l.text));
+    // contents / chapter-outline pages: several "Title ....... 406" lines -> drop those lines
+    const toc = kept.filter((l) => /^.{3,90}?\s+\d{3,4}$/.test(l.text));
+    return toc.length >= 3 ? kept.filter((l) => !toc.includes(l)) : kept;
+  });
+
+  buildVocab(cleanPages.flat().map((l) => l.text));
+
+  // ── body font size = most common size, weighted by characters ──
+  const sizeWeight = new Map();
+  cleanPages.flat().forEach((l) => {
+    const k = Math.round(l.h * 2) / 2;
+    sizeWeight.set(k, (sizeWeight.get(k) || 0) + l.text.length);
+  });
+  let bodySize = 10;
+  let best = 0;
+  for (const [k, w] of sizeWeight) if (w > best) { best = w; bodySize = k; }
+
+  // ── lines -> blocks (heading / sub-heading / bullet / numbered / paragraph) ──
+  const blocks = [];
+  cleanPages.forEach((lines, pi) => {
+    const page = pi + 1;
+    let prev = null; // previous line on this page
+    lines.forEach((l, idx) => {
+      const t = l.text;
+      const gap = prev ? prev.y - l.y : 0;
+      const bigGap = prev ? gap < 0 || gap > Math.max(prev.h, l.h) * 1.55 : true;
+      const isBullet = BULLET_RE.test(t);
+      const isNum = !isBullet && NUM_RE.test(t) && /[.)]\s/.test(t.slice(0, 5));
+      const nextLine = lines[idx + 1];
+      const short = t.length <= 100;
+      const endsSentence = /[.!?]["”’)]?$/.test(t);
+      // "1. Foo" is a heading only when it is NOT part of a 1,2,3... list
+      const n = numOf(t);
+      const inList = n !== null && ((prev && numOf(prev.text) === n - 1) || (nextLine && numOf(nextLine.text) === n + 1));
+      const numberedHeading = /^\d+(\.\d+)*\.?\s+[A-Z(]/.test(t) && !endsSentence && short && !inList;
+      const bigFont = l.h >= bodySize * 1.18 && short && !isBullet && t.split(' ').length <= 14 && !/[,;]$/.test(t) && /^[A-Z0-9(“"]/.test(t);
+      const caps = short && t.length >= 8 && /\s/.test(t) && /[A-Z]/.test(t) && t === t.toUpperCase() && !/\d{3,}/.test(t);
+      const isH2 = !isBullet && (bigFont || numberedHeading || (caps && bigGap));
+      const startsUpper = /^[A-Z0-9(“"]/.test(t);
+      const prevOpen = prev && !/[.!?:;)]["”’]?$/.test(prev.text); // previous line is an unfinished sentence
+      const isH3 =
+        !isH2 && !isBullet && startsUpper && !prevOpen && short && t.length <= 70 &&
+        ((/:$/.test(t) && (bigGap || (nextLine && (BULLET_RE.test(nextLine.text) || NUM_RE.test(nextLine.text))))) ||
+          // a bold label line without a colon ("Main Components of X") that introduces a list
+          (!endsSentence && prev && /[.!?]["”’)]?$/.test(prev.text) && nextLine &&
+            (BULLET_RE.test(nextLine.text) || numOf(nextLine.text) === 1)));
+
+      const last = blocks[blocks.length - 1];
+      if (isH2) {
+        // a heading wrapped over two lines at the same size: merge into one
+        if (last && last.kind === 'h2' && last.page === page && !bigGap && last.size === l.h && !/^\d/.test(t)) last.text += ' ' + t;
+        else blocks.push({ kind: 'h2', text: t, page, size: l.h });
+      } else if (isH3) blocks.push({ kind: 'h3', text: t.replace(/:$/, ''), page });
+      else if (isBullet) blocks.push({ kind: 'bullet', text: cleanInline(t.replace(BULLET_RE, '')), page, x: l.x0 });
+      else if (isNum) blocks.push({ kind: 'num', text: t, page });
+      else if (last && last.kind !== 'h2' && last.kind !== 'h3' && !bigGap && last.page === page) {
+        // wrapped continuation line (rejoin words split by a line-end hyphen)
+        last.text = /[A-Za-z]-$/.test(last.text) && /^[a-z]/.test(t) ? joinHyphen(last.text, t) : last.text + ' ' + t;
+      } else blocks.push({ kind: 'para', text: t, page });
+      prev = l;
+    });
+  });
+  blocks.forEach((b) => { b.text = fixInlineHyphens(cleanInline(b.text)); });
+  const kept = blocks.filter((b) => b.text.replace(/\W/g, '').length >= 2);
+
+  // ── blocks -> sections (by heading) ──
+  const sections = [];
+  let cur = null;
+  const open = (title, page) => { cur = { title, page, pages: new Set([page]), blocks: [] }; sections.push(cur); };
+  for (const b of kept) {
+    if (b.kind === 'h2') { open(stripNumbering(b.text).replace(/[:\-–]+$/, '').trim(), b.page); continue; }
+    if (!cur) open('', b.page);
+    cur.blocks.push(b);
+    cur.pages.add(b.page);
+  }
+  const size = (s) => s.blocks.reduce((n, b) => n + b.text.length, 0);
+
+  // fold tiny sections into the previous one (as a sub-heading), keep page span
+  const folded = [];
+  for (const s of sections) {
+    const prev = folded[folded.length - 1];
+    if (prev && size(s) < MIN_SECTION_CHARS && size(prev) + size(s) < MAX_SECTION_CHARS) {
+      if (s.title) prev.blocks.push({ kind: 'h3', text: s.title, page: s.page });
+      prev.blocks.push(...s.blocks);
+      s.pages.forEach((p) => prev.pages.add(p));
+    } else folded.push(s);
+  }
+
+  // ── sections -> chunks (split long ones at block boundaries) ──
+  // nesting level of a bullet = rank of its left edge among the bullets of this chunk
+  const levelOf = (bl, b) => {
+    const xs = [];
+    bl.filter((q) => q.kind === 'bullet' && typeof q.x === 'number').forEach((q) => {
+      if (!xs.some((v) => Math.abs(v - q.x) < 7)) xs.push(q.x);
+    });
+    xs.sort((a, c) => a - c);
+    const i = xs.findIndex((v) => Math.abs(v - b.x) < 7);
+    return Math.max(0, Math.min(2, i));
+  };
+  const serialize = (title, bl) =>
+    [`## ${title || ''}`.trimEnd(), ...bl.map((b) => (b.kind === 'h3' ? `### ${b.text}` : b.kind === 'bullet' ? `${'  '.repeat(levelOf(bl, b))}- ${b.text}` : b.text))].join('\n');
+
+  const chunks = [];
+  for (const s of folded) {
+    if (size(s) === 0) continue;
+    const parts = [];
+    let part = [];
+    let len = 0;
+    for (const b of s.blocks) {
+      if (len > 0 && len + b.text.length > (size(s) > MAX_SECTION_CHARS ? PART_TARGET_CHARS : Infinity)) {
+        parts.push(part); part = []; len = 0;
+      }
+      part.push(b); len += b.text.length;
+    }
+    if (part.length) parts.push(part);
+    parts.forEach((bl, i) => {
+      const pg = [...new Set(bl.map((b) => b.page))].sort((a, b) => a - b);
+      const text = serialize(s.title, bl);
+      if (text.length < 40) return;
+      chunks.push({ text, title: s.title, pageNumber: pg[0] || s.page, pageNumbers: pg.length ? pg : [s.page], part: i });
+    });
+  }
+
+  const pages = cleanPages.map((lines) => lines.map((l) => l.text).join('\n'));
+  return { text: pages.join('\n\n'), pages, pageCount, chunks };
+}
+
+module.exports = { extractStructured };

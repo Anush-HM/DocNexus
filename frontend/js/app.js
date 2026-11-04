@@ -168,14 +168,22 @@ function applyStep(stepId) {
   lastStepIndex = idx;
 }
 
-const API_BASE = 'http://localhost:5000/api/projects';
+// Same origin when the backend serves the frontend (any deployed host, or localhost:5000);
+// only the local dev servers (live-server / http-server / file://) point at localhost:5000.
+// Override from the page with: window.DOCNEXUS_API = 'https://your-host/api/projects'
+const IS_LOCAL_DEV = !location.protocol.startsWith('http') ||
+  (['localhost', '127.0.0.1'].includes(location.hostname) && location.port !== '5000');
+const API_BASE = window.DOCNEXUS_API ||
+  (IS_LOCAL_DEV ? 'http://localhost:5000/api/projects' : `${location.origin}/api/projects`);
 const POLL_INTERVAL_MS = 1500;
+let pollFailures = 0;
 
 async function pollStatus(projectId) {
   try {
     const res = await fetch(`${API_BASE}/${projectId}/status`);
     if (!res.ok) throw new Error('status check failed');
     const data = await res.json();
+    pollFailures = 0;
 
     if (data.progress?.step) applyStep(data.progress.step);
 
@@ -199,7 +207,13 @@ async function pollStatus(projectId) {
     setTimeout(() => pollStatus(projectId), POLL_INTERVAL_MS);
   } catch (err) {
     console.error('[pollStatus]', err);
-    setProgress(STEPS[Math.max(lastStepIndex, 0)]?.pct || 0, 'Connection lost. Retrying...');
+    pollFailures++;
+    setProgress(
+      STEPS[Math.max(lastStepIndex, 0)]?.pct || 0,
+      pollFailures >= 4
+        ? "Can't reach the backend (is `npm run dev` running in the backend folder?). Retrying..."
+        : 'Connection lost. Retrying...'
+    );
     setTimeout(() => pollStatus(projectId), POLL_INTERVAL_MS * 2);
   }
 }
@@ -231,7 +245,13 @@ async function startFusion() {
     pollStatus(projectId);
   } catch (err) {
     console.error('[startFusion]', err);
-    setProgress(0, 'Upload failed. Please try again.');
+    const unreachable = err instanceof TypeError; // fetch could not reach the server at all
+    setProgress(
+      0,
+      unreachable
+        ? 'Cannot reach the backend (is it running on port 5000?)'
+        : `Upload failed: ${err.message}`
+    );
   }
 }
 

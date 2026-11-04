@@ -121,3 +121,74 @@ function appendBotMessage(html, sources = []) {
   messages.appendChild(el);
   messages.scrollTop = messages.scrollHeight;
 }
+
+// ─────────────────────────────────────────────
+//  Suggestions built from the user's OWN notes (+ exam stats once papers exist)
+// ─────────────────────────────────────────────
+const GENERIC_CHAT_TITLE = /review questions|topics? for discussion|summary|bibliograph|references|chapter outline|more figures|^m4 notes|contains only/i;
+let chatHasPapers = false;
+
+function refreshChatSuggestions() {
+  const box = document.getElementById('chatSuggestions');
+  if (!box || typeof NOTES === 'undefined' || !NOTES.length) return false;
+  const titles = NOTES.map(n => n.title).filter(t => t && t.length < 60 && !GENERIC_CHAT_TITLE.test(t));
+  const pick = (i) => titles[Math.floor((i * titles.length) / 3)];
+  const list = [];
+  if (titles.length) list.push(`Summarize "${pick(0)}"`);
+  if (titles.length > 3) list.push(`Explain "${pick(1)}"`);
+  list.push('Summarize the 1st topic');
+  if (typeof CONFLICTS !== 'undefined' && CONFLICTS.length) list.push('What are the conflicts?');
+  if (chatHasPapers) { list.push('Which topics are asked most often?'); list.push('Which topics were asked last year?'); }
+  else list.push('List all the topics');
+  box.innerHTML = list.slice(0, 5).map(t =>
+    `<button onclick="sendSuggestion(this)" class="text-[11px] px-3 py-1.5 rounded-xl border border-white/10 text-zinc-400 hover:border-[#7c6fff]/40 hover:text-[#a78bfa] transition-all disabled:opacity-30 disabled:cursor-not-allowed">${escapeHtml(t)}</button>`
+  ).join('');
+  box.classList.remove('hidden');
+  return true;
+}
+
+// Question papers are optional and can be added right from the chat
+function attachQPFromChat(input) {
+  const files = Array.from(input.files || []).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+  if (!files.length) return;
+  appendBotMessage(`Got ${files.length} question paper${files.length > 1 ? 's' : ''} (${escapeHtml(files.map(f => f.name).join(', '))}). Analysing which topics were asked and when…`, []);
+  const dt = new DataTransfer();
+  files.forEach(f => dt.items.add(f));
+  handleResultQPFiles(dt.files); // same upload + polling as the question-paper panel
+  input.value = '';
+  watchQPForChat();
+}
+
+let qpChatTimer = null;
+function watchQPForChat() {
+  if (qpChatTimer) clearInterval(qpChatTimer);
+  qpChatTimer = setInterval(async () => {
+    try {
+      const r = await fetch(`${API_BASE}/${projectId}/qp-status`);
+      const d = await r.json();
+      if (d.qpStatus === 'ready') {
+        clearInterval(qpChatTimer);
+        chatHasPapers = true;
+        const top = (d.examTopics || []).slice(0, 3).map(t => t.topic);
+        appendBotMessage(top.length
+          ? `Done. Most-asked so far: ${escapeHtml(top.join(', '))}. Ask me "which topics were asked last year?" or "was ${escapeHtml(top[0])} asked before?".`
+          : 'Done, but I could not match the questions to your topics. You can still ask about the papers.', []);
+        refreshChatSuggestions();
+      } else if (d.qpStatus === 'failed') {
+        clearInterval(qpChatTimer);
+        appendBotMessage(`Could not analyse the papers: ${escapeHtml(d.qpErrorMessage || 'unknown error')}`, []);
+      }
+    } catch (e) { /* keep polling */ }
+  }, 2500);
+}
+
+(function initChatSuggestions() {
+  let tries = 0;
+  const t = setInterval(() => {
+    tries++;
+    if (typeof NOTES !== 'undefined' && NOTES.length) {
+      fetch(`${API_BASE}/${projectId}/qp-status`).then(r => r.json()).then(d => { chatHasPapers = d.qpStatus === 'ready'; refreshChatSuggestions(); }).catch(refreshChatSuggestions);
+      clearInterval(t);
+    } else if (tries > 40) clearInterval(t);
+  }, 500);
+})();
