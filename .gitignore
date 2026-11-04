@@ -39,3 +39,7 @@ build/
 
 # ── Misc local-only files ──
 *.local
+# ── Auth secret + local backups ──
+backend/.jwt-secret
+*.bak*
+_figtest/
