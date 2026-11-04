@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="frontend/assets/logo-v2.jpg" alt="DocNexus logo" width="110">
-
 # DocNexus
 
 ### 📚 Turn scattered study PDFs into one perfect knowledge base
@@ -20,17 +18,17 @@ Upload several PDFs on the same topic. DocNexus merges them into a single, clean
 
 ## ✨ Features
 
-| | Feature | What it does |
-|---|---|---|
-| 🧩 | **Knowledge fusion** | Combines multiple PDFs into one set of unified notes, merging the same topic from different sources and removing repeated content. |
-| ⚠️ | **Conflict detection** | When sources disagree on a fact, both versions are surfaced in a *Conflicts* tab instead of silently picking one. |
-| 🖼️ | **Diagrams & tables preserved** | Figures, tables and grids are detected, cropped from the PDFs and placed under the right topic. Duplicate pictures across sources are removed. |
-| 🗂️ | **Source-faithful structure** | Notes keep headings, paragraphs, lists and nested numbering like the originals — no empty headings, no generic labels. |
-| 🃏 | **Flashcards, quiz & revision sheet** | Generated together with the notes, so there is nothing extra to wait for. |
-| 💬 | **Ask DocNexus (RAG chat)** | Ask questions and get answers grounded in your own notes, with citations from the retrieved sections. |
-| 📝 | **Question-paper analysis** *(optional)* | Add previous-year papers from the Unified Notes tab to see which topics were asked, how often, and in which years. The chat can then answer "what was asked last year?". |
-| 📄 | **PDF export** | Download the unified notes as a formatted PDF. |
-| 🔐 | **Accounts & saved projects** | Sign up with email and password. Every project is stored on your account and can be reopened, exported or deleted from **My projects**. |
+|     | Feature                                  | What it does                                                                                                                                                             |
+| --- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 🧩  | **Knowledge fusion**                     | Combines multiple PDFs into one set of unified notes, merging the same topic from different sources and removing repeated content.                                       |
+| ⚠️  | **Conflict detection**                   | When sources disagree on a fact, both versions are surfaced in a _Conflicts_ tab instead of silently picking one.                                                        |
+| 🖼️  | **Diagrams & tables preserved**          | Figures, tables and grids are detected, cropped from the PDFs and placed under the right topic. Duplicate pictures across sources are removed.                           |
+| 🗂️  | **Source-faithful structure**            | Notes keep headings, paragraphs, lists and nested numbering like the originals — no empty headings, no generic labels.                                                   |
+| 🃏  | **Flashcards, quiz & revision sheet**    | Generated together with the notes, so there is nothing extra to wait for.                                                                                                |
+| 💬  | **Ask DocNexus (RAG chat)**              | Ask questions and get answers grounded in your own notes, with citations from the retrieved sections.                                                                    |
+| 📝  | **Question-paper analysis** _(optional)_ | Add previous-year papers from the Unified Notes tab to see which topics were asked, how often, and in which years. The chat can then answer "what was asked last year?". |
+| 📄  | **PDF export**                           | Download the unified notes as a formatted PDF.                                                                                                                           |
+| 🔐  | **Accounts & saved projects**            | Sign up with email and password. Every project is stored on your account and can be reopened, exported or deleted from **My projects**.                                  |
 
 ## 🏗️ How it works
 
@@ -71,7 +69,7 @@ DocNexus/
 │   ├── controllers/          # Request handlers
 │   ├── services/             # Pipeline, fusion engine, RAG, PDF, exam analysis, auth
 │   ├── scripts/              # One-off scripts (e.g. vector index creation)
-│   └── uploads/              # Uploaded PDFs (git-ignored)
+│   └── uploads/              # Uploaded PDFs — created automatically (git-ignored)
 └── frontend/
     ├── index.html            # Upload page
     ├── results.html          # Notes, conflicts, study material, chat
@@ -122,11 +120,11 @@ MAX_FILE_SIZE_MB=20
 
 **Optional tuning**
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `FUSION_USE_AI` | on | Set to `0` to skip the LLM merge and use local structuring only. |
-| `EXAM_MATCH_THRESHOLD` | `0.42` | Similarity needed to match an exam question to a topic. |
-| `NOTE_VECTOR_INDEX_NAME` | `note_vector_index` | Vector index for unified notes. |
+| Variable                 | Default             | Purpose                                                          |
+| ------------------------ | ------------------- | ---------------------------------------------------------------- |
+| `FUSION_USE_AI`          | on                  | Set to `0` to skip the LLM merge and use local structuring only. |
+| `EXAM_MATCH_THRESHOLD`   | `0.42`              | Similarity needed to match an exam question to a topic.          |
+| `NOTE_VECTOR_INDEX_NAME` | `note_vector_index` | Vector index for unified notes.                                  |
 
 ### 3. (Recommended) Create the vector search indexes
 
@@ -147,6 +145,8 @@ npm run backend   # API on http://localhost:5000
 npm run frontend  # static site served by live-server
 ```
 
+> 📂 You don't need to create `backend/uploads/` yourself — the backend creates it automatically on first start.
+
 Open the frontend, **create an account**, upload two or more PDFs, and click **Start Fusion**.
 
 ## 🧭 Using DocNexus
@@ -155,7 +155,7 @@ Open the frontend, **create an account**, upload two or more PDFs, and click **S
 2. 📤 **Upload** two or more PDFs on the same topic (optionally add a topic label) and start the fusion.
 3. 📖 Read the **Unified Notes**, check the **Conflicts** tab, and export the PDF if you like.
 4. 🃏 Open **Flashcards**, **Quiz** and the **Revision sheet** — they are ready with the notes.
-5. 📝 *(Optional)* In the Unified Notes tab, add **previous-year question papers** to see most-asked topics.
+5. 📝 _(Optional)_ In the Unified Notes tab, add **previous-year question papers** to see most-asked topics.
 6. 💬 Use **Ask DocNexus** to query your notes.
 7. 📂 Come back any time from **My projects**.
 
@@ -163,37 +163,23 @@ Open the frontend, **create an account**, upload two or more PDFs, and click **S
 
 All `/api/projects/*` routes require `Authorization: Bearer <token>` and only return the signed-in user's projects.
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/api/auth/register` | Create an account |
-| `POST` | `/api/auth/login` | Sign in, returns a token |
-| `GET` | `/api/auth/me` | Current user |
-| `GET` | `/api/projects` | List my projects |
-| `POST` | `/api/projects/upload` | Upload PDFs and start a fusion |
-| `GET` | `/api/projects/:id/status` | Processing progress |
-| `GET` | `/api/projects/:id/results` | Notes, conflicts, stats |
-| `GET` | `/api/projects/:id/export/:kind` | Download a PDF |
-| `GET` | `/api/projects/:id/study-material-status` | Flashcards / quiz / revision readiness |
-| `POST` | `/api/projects/:id/chat` | Ask a question about the notes |
-| `POST` | `/api/projects/:id/question-papers` | Add previous-year question papers later |
-| `GET` | `/api/projects/:id/qp-status` | Question-paper processing status |
-| `GET` | `/api/projects/:id/exam-analysis` | Most-asked topics |
-| `POST` | `/api/projects/:id/exam-question` | Ask about an exam question |
-| `DELETE` | `/api/projects/:id` | Delete a project |
-
-## 🔒 Security notes
-
-- Passwords are hashed with scrypt; tokens are HMAC-signed. No plaintext passwords are stored.
-- Keep `.env` out of git (already in `.gitignore`). The login-signing key is generated automatically on first start and saved in `backend/.jwt-secret`, which is also git-ignored.
-- Uploaded PDFs are stored in `backend/uploads/` and are git-ignored.
-- Rotate any credentials that were ever committed or backed up (for example, old `.env` copies).
-
-## 🗺️ Roadmap
-
-- 🔑 Sign in with Google
-- 🔁 Password reset by email
-- ➕ Add documents to an existing project
-- 🌐 Production deployment guide
+| Method   | Endpoint                                  | Description                             |
+| -------- | ----------------------------------------- | --------------------------------------- |
+| `POST`   | `/api/auth/register`                      | Create an account                       |
+| `POST`   | `/api/auth/login`                         | Sign in, returns a token                |
+| `GET`    | `/api/auth/me`                            | Current user                            |
+| `GET`    | `/api/projects`                           | List my projects                        |
+| `POST`   | `/api/projects/upload`                    | Upload PDFs and start a fusion          |
+| `GET`    | `/api/projects/:id/status`                | Processing progress                     |
+| `GET`    | `/api/projects/:id/results`               | Notes, conflicts, stats                 |
+| `GET`    | `/api/projects/:id/export/:kind`          | Download a PDF                          |
+| `GET`    | `/api/projects/:id/study-material-status` | Flashcards / quiz / revision readiness  |
+| `POST`   | `/api/projects/:id/chat`                  | Ask a question about the notes          |
+| `POST`   | `/api/projects/:id/question-papers`       | Add previous-year question papers later |
+| `GET`    | `/api/projects/:id/qp-status`             | Question-paper processing status        |
+| `GET`    | `/api/projects/:id/exam-analysis`         | Most-asked topics                       |
+| `POST`   | `/api/projects/:id/exam-question`         | Ask about an exam question              |
+| `DELETE` | `/api/projects/:id`                       | Delete a project                        |
 
 ---
 
